@@ -1,7 +1,7 @@
 import Foundation
 
 enum ESCLXMLBuilder {
-    static func buildScanSettingsXML(for request: ScanJobRequest) -> String {
+    static func buildScanSettingsXML(for request: ScanJobRequest, minimal: Bool = false) -> String {
         let intentValue = request.isPreview ? "Preview" : request.intent.rawValue
         let formatValue = request.transferFormat.rawValue
         var toneXML = ""
@@ -12,12 +12,16 @@ enum ESCLXMLBuilder {
             toneXML += "\n  <scan:Contrast>\(contrast)</scan:Contrast>"
         }
 
+        // HP eSCL printers (e.g. OfficeJet 3830) encode image/jpeg as YCC and reject ColorSpace=sRGB with 409 Conflict.
         let colorSpaceXML: String
-        if request.colorMode == .rgb24 {
+        if !minimal && request.colorMode == .rgb24 && request.transferFormat == .rawOctetStream {
             colorSpaceXML = "\n  <scan:ColorSpace>sRGB</scan:ColorSpace>"
         } else {
             colorSpaceXML = ""
         }
+
+        let contentTypeXML = minimal ? "" : "\n  <pwg:ContentType>\(request.intent.contentType)</pwg:ContentType>"
+        let formatExtXML = minimal ? "" : "\n  <scan:DocumentFormatExt>\(formatValue)</scan:DocumentFormatExt>"
 
         return """
         <?xml version="1.0" encoding="UTF-8"?>
@@ -34,10 +38,8 @@ enum ESCLXMLBuilder {
             </pwg:ScanRegion>
           </pwg:ScanRegions>
           <pwg:InputSource>\(request.inputSource.rawValue)</pwg:InputSource>
-          <scan:ColorMode>\(request.colorMode.rawValue)</scan:ColorMode>\(colorSpaceXML)
-          <pwg:ContentType>\(request.intent.contentType)</pwg:ContentType>
-          <pwg:DocumentFormat>\(formatValue)</pwg:DocumentFormat>
-          <scan:DocumentFormatExt>\(formatValue)</scan:DocumentFormatExt>
+          <scan:ColorMode>\(request.colorMode.rawValue)</scan:ColorMode>\(colorSpaceXML)\(contentTypeXML)
+          <pwg:DocumentFormat>\(formatValue)</pwg:DocumentFormat>\(formatExtXML)
           <scan:XResolution>\(request.resolution)</scan:XResolution>
           <scan:YResolution>\(request.resolution)</scan:YResolution>\(toneXML)
         </scan:ScanSettings>

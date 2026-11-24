@@ -75,6 +75,30 @@ final class ChromaScanTests: XCTestCase {
         XCTAssertTrue(xml.contains("<scan:ColorSpace>sRGB</scan:ColorSpace>"))
         XCTAssertTrue(xml.contains("<scan:Brightness>1050</scan:Brightness>"))
         XCTAssertTrue(xml.contains("<scan:Contrast>1100</scan:Contrast>"))
+
+        // JPEG transfer should omit ColorSpace=sRGB (HP firmware uses YCC and rejects sRGB with 409)
+        let jpegReq = ScanJobRequest(
+            version: "2.5",
+            inputSource: .platen,
+            resolution: 300,
+            colorMode: .rgb24,
+            intent: .photo,
+            isPreview: false,
+            transferFormat: .jpeg,
+            region: (0, 0, 2550, 3300),
+            brightness: nil,
+            contrast: nil
+        )
+        let jpegXML = ESCLXMLBuilder.buildScanSettingsXML(for: jpegReq)
+        XCTAssertTrue(jpegXML.contains("<pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>"))
+        XCTAssertFalse(jpegXML.contains("<scan:ColorSpace>sRGB</scan:ColorSpace>"))
+
+        // Minimal fallback omits optional ColorSpace, ContentType, and DocumentFormatExt
+        let minimalXML = ESCLXMLBuilder.buildScanSettingsXML(for: req, minimal: true)
+        XCTAssertFalse(minimalXML.contains("<scan:ColorSpace>"))
+        XCTAssertFalse(minimalXML.contains("<pwg:ContentType>"))
+        XCTAssertFalse(minimalXML.contains("<scan:DocumentFormatExt>"))
+        XCTAssertTrue(minimalXML.contains("<pwg:DocumentFormat>application/octet-stream</pwg:DocumentFormat>"))
     }
 
     func testImagePipelineDisplayP3ConvertAndExportTIFF() throws {

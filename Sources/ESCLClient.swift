@@ -59,16 +59,16 @@ final class ESCLClient: Sendable {
         request: ScanJobRequest,
         onProgress: @escaping @Sendable (_ bytesReceived: Int64, _ expectedBytes: Int64) -> Void
     ) async throws -> ScanDownloadResult {
-        // 1. POST /eSCL/ScanJobs
+        // 1. POST /eSCL/ScanJobs (retry once with minimal XML if firmware returns 409 Conflict)
         let jobsURL = scanner.baseURL.appendingPathComponent("ScanJobs")
-        var postReq = URLRequest(url: jobsURL)
-        postReq.httpMethod = "POST"
-        postReq.setValue("text/xml; charset=utf-8", forHTTPHeaderField: "Content-Type")
-        let xml = ESCLXMLBuilder.buildScanSettingsXML(for: request)
-        postReq.httpBody = xml.data(using: .utf8)
+        let initialXML = ESCLXMLBuilder.buildScanSettingsXML(for: request, minimal: false)
+        var (postData, postResp) = try await postScanJob(to: jobsURL, xml: initialXML)
 
-        let (_, postResp) = try await session.data(for: postReq)
-        try validateHTTP(postResp, expected: 200...299)
+        if let http = postResp as? HTTPURLResponse, http.statusCode == 409 {
+            let fallbackXML = ESCLXMLBuilder.buildScanSettingsXML(for: request, minimal: true)
+            (postData, postResp) = try await postScanJob(to: jobsURL, xml: fallbackXML)
+        }
+        try validateHTTP(postResp, expected: 200...299, body: postData, request: request)
 
         guard let httpResp = postResp as? HTTPURLResponse,
               let locationStr = httpResp.value(forHTTPHeaderField: "Location") else {
@@ -154,12 +154,39 @@ final class ESCLClient: Sendable {
         }
     }
 
-    private func validateHTTP(_ response: URLResponse, expected: ClosedRange<Int>) throws {
+    private func postScanJob(to jobsURL: URL, xml: String) async throws -> (Data, URLResponse) {
+        var postReq = URLRequest(url: jobsURL)
+        postReq.httpMethod = "POST"
+        postReq.setValue("text/xml; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        postReq.httpBody = xml.data(using: .utf8)
+        return try await session.data(for: postReq)
+    }
+
+    private func validateHTTP(
+        _ response: URLResponse,
+        expected: ClosedRange<Int>,
+        body: Data? = nil,
+        request: ScanJobRequest? = nil
+    ) throws {
         guard let http = response as? HTTPURLResponse else {
             throw ESCLClientError.httpError(-1, "Non-HTTP response")
         }
         guard expected.contains(http.statusCode) else {
             let reason = HTTPURLResponse.localizedString(forStatusCode: http.statusCode)
+            if http.statusCode == 409 {
+                let hint: String
+                if let req = request, req.transferFormat == .jpeg && req.resolution >= 1200 {
+                    hint = "\(reason) — this scanner may not support Fast Wi-Fi (JPEG) at \(req.resolution) DPI. Try RAW (Lossless) or a lower DPI."
+                } else if let req = request, req.inputSource == .feeder {
+                    hint = "\(reason) — check that paper is loaded in the Document Feeder (ADF) or switch Source to Flatbed."
+                } else {
+                    hint = "\(reason) — scanner rejected this combination of settings (format/resolution/source)."
+                }
+                throw ESCLClientError.httpError(http.statusCode, hint)
+            }
+            if let body, let text = String(data: body, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+                throw ESCLClientError.httpError(http.statusCode, "\(reason) (\(text.prefix(120)))")
+            }
             throw ESCLClientError.httpError(http.statusCode, reason)
         }
     }
