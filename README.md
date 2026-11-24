@@ -1,3 +1,5 @@
+<img src="Resources/Assets.xcassets/AppIcon.appiconset/pigment-pass-256.png" width="128" height="128" alt="ChromaScan app icon">
+
 # ChromaScan
 
 A lightweight, pure **AppKit** macOS scanner app built for direct Wi-Fi **eSCL (AirScan)** scanning with full control over resolution (up to 1200 DPI), uncompressed RAW pixel streaming, hardware Brightness/Contrast, software tone curves, and **Display P3 / sRGB** ICC color management.
