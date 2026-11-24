@@ -1,0 +1,1075 @@
+import Foundation
+import CoreGraphics
+
+enum SessionEngineEvent: Sendable {
+    case snapshotChanged(SessionSnapshot)
+    case displayImageUpdated(
+        image: CGImage,
+        truePixelSize: CGSize,
+        summary: String,
+        generation: UInt32,
+        kind: CompanionImageKind,
+        dpi: Int
+    )
+    case fullScanImageReady(CGImage)
+    case progress(
+        operation: CompanionOperation,
+        bytesReceived: Int64,
+        expectedBytes: Int64,
+        elapsedSeconds: Double,
+        statusText: String
+    )
+    case scanCompleted(
+        url: URL,
+        pixelWidth: Int,
+        pixelHeight: Int,
+        fileSizeBytes: Int64,
+        elapsedSeconds: Double
+    )
+    case exportCompleted(
+        url: URL,
+        fileSizeBytes: Int64,
+        elapsedSeconds: Double
+    )
+    case error(title: String, message: String)
+}
+
+/// Headless single source of truth for scanner discovery, capabilities, settings, raw buffers,
+/// scan/export jobs, sleep prevention, and Display P3 proxy/tile rendering.
+/// Observed simultaneously by `MainWindowController` (AppKit) and `CompanionServer` (iPhone).
+@MainActor
+final class ScanSessionEngine {
+
+    let preferences: AppPreferences
+    private let browser: ScannerBrowserProtocol
+    private let client: ESCLClientProtocol
+
+    // MARK: - Owned State
+
+    private(set) var scanners: [DiscoveredScanner] = []
+    private(set) var selectedScannerID: String?
+    private(set) var capabilities: ScannerCapabilities?
+    private(set) var scannerStatus: ScannerStatus?
+    private(set) var settings: ScanSessionSettings
+    private(set) var saveFolderURL: URL
+    private(set) var cropRect: NormalizedCropRect = .full
+    private(set) var viewMode: CanvasViewMode = .preview
+    private(set) var isBusy: Bool = false
+    private(set) var activeOperation: CompanionOperation?
+    private(set) var statusText: String = "Searching for Wi-Fi scanners…"
+    private(set) var isErrorStatus: Bool = false
+    private(set) var outputPreviewSummary: String = ""
+    private(set) var lastSavedURL: URL?
+    private(set) var platenAspectRatio: Double = 2550.0 / 3508.0
+
+    // Raw & rendered image buffers
+    private(set) var rawPreviewBuffer: RawImageBuffer?
+    private(set) var rawScanBuffer: RawImageBuffer?
+    private(set) var rawScanProxyBuffer: RawImageBuffer?
+    private(set) var renderedDisplayImage: CGImage?
+    private(set) var renderedDisplayTrueSize: CGSize = .zero
+    private(set) var renderedDisplayDPI: Int = 100
+    private(set) var renderedFullScanImage: CGImage?
+    private(set) var activeImageGeneration: UInt32 = 0
+
+    private var defaultHardwareBrightness: Int = 1000
+    private var defaultHardwareContrast: Int = 1000
+    private var fullScanRenderSignature: RenderSignature?
+
+    private var activeTask: Task<Void, Never>?
+    private var previewRenderTask: Task<Void, Never>?
+    private var fullScanRenderTask: Task<Void, Never>?
+    private var activePowerActivity: NSObjectProtocol?
+
+    private var observers: [UUID: @MainActor (SessionEngineEvent) -> Void] = [:]
+
+    private struct RenderSignature: Equatable {
+        let rotation: ScanRotation
+        let colorProfile: ColorProfileMode
+        let toneAdjustments: ToneAdjustments
+    }
+
+    var selectedScanner: DiscoveredScanner? {
+        guard let selectedScannerID else { return nil }
+        return scanners.first(where: { $0.id == selectedScannerID })
+    }
+
+    var effectiveHardwareBrightness: Int? {
+        guard capabilities?.brightnessRange != nil else { return nil }
+        return settings.hardwareBrightness == defaultHardwareBrightness ? nil : settings.hardwareBrightness
+    }
+
+    var effectiveHardwareContrast: Int? {
+        guard capabilities?.contrastRange != nil else { return nil }
+        return settings.hardwareContrast == defaultHardwareContrast ? nil : settings.hardwareContrast
+    }
+
+    // MARK: - Init
+
+    init(
+        preferences: AppPreferences = AppPreferences(),
+        browser: ScannerBrowserProtocol = BonjourScannerBrowser(),
+        client: ESCLClientProtocol = ESCLClient()
+    ) {
+        self.preferences = preferences
+        self.browser = browser
+        self.client = client
+        self.saveFolderURL = preferences.saveFolderURL
+        self.settings = ScanSessionSettings(
+            inputSource: .platen,
+            resolution: preferences.resolution,
+            colorMode: preferences.colorMode,
+            intent: preferences.intent,
+            transferFormat: preferences.transferFormat,
+            rotation: preferences.rotation,
+            hardwareBrightness: 1000,
+            hardwareContrast: 1000,
+            colorProfile: preferences.colorProfile,
+            outputFormat: preferences.outputFormat,
+            quality: preferences.quality,
+            previewCompressionEnabled: true,
+            toneAdjustments: ToneAdjustments(),
+            baseFilename: preferences.baseFilename,
+            autoIncrement: preferences.autoIncrement
+        )
+
+        browser.onScannersChanged = { [weak self] found in
+            self?.handleDiscoveredScanners(found)
+        }
+    }
+
+    // MARK: - Observation & Snapshot
+
+    @discardableResult
+    func addObserver(_ handler: @escaping @MainActor (SessionEngineEvent) -> Void) -> UUID {
+        let id = UUID()
+        observers[id] = handler
+        return id
+    }
+
+    func removeObserver(_ id: UUID) {
+        observers.removeValue(forKey: id)
+    }
+
+    func makeSnapshot() -> SessionSnapshot {
+        let scanW: Int?
+        let scanH: Int?
+        let scanDPI: Int?
+        if let rawScan = rawScanBuffer {
+            let rotated = (settings.rotation == .deg90 || settings.rotation == .deg270)
+            scanW = rotated ? rawScan.height : rawScan.width
+            scanH = rotated ? rawScan.width : rawScan.height
+            scanDPI = rawScan.dpi
+        } else {
+            scanW = nil
+            scanH = nil
+            scanDPI = nil
+        }
+
+        return SessionSnapshot(
+            scanners: scanners,
+            selectedScannerID: selectedScannerID,
+            capabilities: capabilities,
+            scannerStatus: scannerStatus,
+            settings: settings,
+            cropRect: cropRect,
+            viewMode: viewMode,
+            isBusy: isBusy,
+            activeOperation: activeOperation,
+            statusText: statusText,
+            isErrorStatus: isErrorStatus,
+            hasPreviewImage: rawPreviewBuffer != nil,
+            hasScanImage: rawScanBuffer != nil,
+            platenAspectRatio: platenAspectRatio,
+            lastSavedFilename: lastSavedURL?.lastPathComponent,
+            saveFolderDisplayName: saveFolderURL.lastPathComponent,
+            outputPreviewSummary: outputPreviewSummary,
+            activeImageGeneration: activeImageGeneration,
+            scanPixelWidth: scanW,
+            scanPixelHeight: scanH,
+            scanDPI: scanDPI
+        )
+    }
+
+    private func emit(_ event: SessionEngineEvent) {
+        for handler in observers.values {
+            handler(event)
+        }
+    }
+
+    private func broadcastSnapshot() {
+        emit(.snapshotChanged(makeSnapshot()))
+    }
+
+    // MARK: - Discovery & Scanner Selection
+
+    func startDiscovery() {
+        statusText = "Searching for Wi-Fi scanners…"
+        isErrorStatus = false
+        browser.start()
+        broadcastSnapshot()
+    }
+
+    func stopDiscovery() {
+        browser.stop()
+    }
+
+    func refreshScanners() {
+        if let scanner = selectedScanner {
+            loadCapabilities(for: scanner)
+        }
+        browser.start()
+    }
+
+    func selectScanner(id: String) {
+        guard !isBusy,
+              let chosen = scanners.first(where: { $0.id == id }),
+              chosen.id != selectedScannerID else { return }
+        selectedScannerID = chosen.id
+        capabilities = nil
+        scannerStatus = nil
+        broadcastSnapshot()
+        loadCapabilities(for: chosen)
+    }
+
+    func addManualScanner(host: String, port: Int, useTLS: Bool, rootPath: String = "eSCL") {
+        let cleanHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanHost.isEmpty else { return }
+        browser.addManualScanner(host: cleanHost, port: port, useTLS: useTLS, rootPath: rootPath)
+        let expectedID = "manual:\(cleanHost):\(port):\(useTLS)"
+        if let added = scanners.first(where: { $0.id == expectedID }) ?? scanners.last {
+            selectedScannerID = added.id
+            capabilities = nil
+            scannerStatus = nil
+            broadcastSnapshot()
+            loadCapabilities(for: added)
+        }
+    }
+
+    private func handleDiscoveredScanners(_ found: [DiscoveredScanner]) {
+        let prevID = selectedScannerID
+        self.scanners = found
+
+        if let prevID, found.contains(where: { $0.id == prevID }) {
+            // Keep existing selection
+        } else if selectedScannerID == nil, let first = found.first {
+            selectedScannerID = first.id
+            loadCapabilities(for: first)
+        } else if found.isEmpty {
+            selectedScannerID = nil
+            capabilities = nil
+            scannerStatus = nil
+            if !isBusy {
+                statusText = "No Wi-Fi scanners found"
+                isErrorStatus = false
+            }
+        } else if let first = found.first {
+            selectedScannerID = first.id
+            capabilities = nil
+            scannerStatus = nil
+            loadCapabilities(for: first)
+        }
+
+        broadcastSnapshot()
+    }
+
+    private func loadCapabilities(for scanner: DiscoveredScanner) {
+        if !isBusy {
+            statusText = "Connecting to \(scanner.displayTitle)…"
+            isErrorStatus = false
+            broadcastSnapshot()
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                async let capsTask = client.fetchCapabilities(from: scanner)
+                async let statusTask = client.fetchStatus(from: scanner)
+                let (caps, status) = try await (capsTask, statusTask)
+                guard self.selectedScannerID == scanner.id else { return }
+                self.capabilities = caps
+                self.scannerStatus = status
+                self.reconcileSettingsWithCapabilities(caps)
+                if let platen = caps.platen, platen.maxHeight > 0 {
+                    self.platenAspectRatio = Double(platen.maxWidth) / Double(platen.maxHeight)
+                }
+                if !self.isBusy {
+                    self.statusText = "Ready · \(caps.makeAndModel) (\(status.state))"
+                    self.isErrorStatus = false
+                }
+                self.broadcastSnapshot()
+            } catch {
+                guard self.selectedScannerID == scanner.id else { return }
+                self.capabilities = nil
+                self.scannerStatus = nil
+                if !self.isBusy {
+                    self.statusText = "Could not reach scanner: \(error.localizedDescription)"
+                    self.isErrorStatus = true
+                }
+                self.broadcastSnapshot()
+            }
+        }
+    }
+
+    private func reconcileSettingsWithCapabilities(_ caps: ScannerCapabilities) {
+        // Source
+        var availableSources: [ScanInputSource] = []
+        if caps.platen != nil { availableSources.append(.platen) }
+        if caps.adf != nil { availableSources.append(.feeder) }
+        if !availableSources.isEmpty && !availableSources.contains(settings.inputSource) {
+            settings.inputSource = availableSources[0]
+        }
+
+        let inputCaps = caps.caps(for: settings.inputSource) ?? caps.platen
+        if let resList = inputCaps?.discreteResolutions, !resList.isEmpty, !resList.contains(settings.resolution) {
+            settings.resolution = resList.last ?? 300
+            preferences.resolution = settings.resolution
+        }
+
+        if let modes = inputCaps?.colorModes, !modes.isEmpty {
+            let supported = ScanColorMode.allCases.filter { modes.contains($0.rawValue) }
+            if !supported.isEmpty && !supported.contains(settings.colorMode) {
+                settings.colorMode = supported[0]
+                preferences.colorMode = settings.colorMode
+            }
+        }
+
+        if let inputCaps {
+            var formats: [TransferFormat] = []
+            if inputCaps.supportsRawOctetStream { formats.append(.rawOctetStream) }
+            if inputCaps.supportsJPEG { formats.append(.jpeg) }
+            if !formats.isEmpty && !formats.contains(settings.transferFormat) {
+                settings.transferFormat = formats[0]
+                preferences.transferFormat = settings.transferFormat
+            }
+        }
+
+        if let br = caps.brightnessRange {
+            defaultHardwareBrightness = br.normal
+            settings.hardwareBrightness = br.normal
+        }
+        if let cr = caps.contrastRange {
+            defaultHardwareContrast = cr.normal
+            settings.hardwareContrast = cr.normal
+        }
+    }
+
+    // MARK: - Settings, Crop & View Mode Mutations
+
+    func updateSettings(_ patch: ScanSettingsPatch) {
+        let oldSettings = settings
+
+        // Capture settings cannot mutate while busy (except live display/output adjustments)
+        if !isBusy {
+            if let source = patch.inputSource {
+                settings.inputSource = source
+                if let caps = capabilities {
+                    let inputCaps = caps.caps(for: source) ?? caps.platen
+                    if let resList = inputCaps?.discreteResolutions, !resList.isEmpty, !resList.contains(settings.resolution) {
+                        settings.resolution = resList.last ?? 300
+                        preferences.resolution = settings.resolution
+                    }
+                }
+            }
+            if let res = patch.resolution, res > 0 {
+                settings.resolution = res
+                preferences.resolution = res
+            }
+            if let mode = patch.colorMode {
+                settings.colorMode = mode
+                preferences.colorMode = mode
+            }
+            if let intent = patch.intent {
+                settings.intent = intent
+                preferences.intent = intent
+            }
+            if let tf = patch.transferFormat {
+                settings.transferFormat = tf
+                preferences.transferFormat = tf
+            }
+            if patch.resetHardwareTone == true {
+                settings.hardwareBrightness = defaultHardwareBrightness
+                settings.hardwareContrast = defaultHardwareContrast
+            } else {
+                if let b = patch.hardwareBrightness {
+                    if let range = capabilities?.brightnessRange {
+                        settings.hardwareBrightness = max(range.min, min(range.max, b))
+                    } else {
+                        settings.hardwareBrightness = b
+                    }
+                }
+                if let c = patch.hardwareContrast {
+                    if let range = capabilities?.contrastRange {
+                        settings.hardwareContrast = max(range.min, min(range.max, c))
+                    } else {
+                        settings.hardwareContrast = c
+                    }
+                }
+            }
+            if let name = patch.baseFilename {
+                settings.baseFilename = name
+                preferences.baseFilename = name
+            }
+        }
+
+        if let rot = patch.rotation {
+            settings.rotation = rot
+            preferences.rotation = rot
+        }
+        if let profile = patch.colorProfile {
+            settings.colorProfile = profile
+            preferences.colorProfile = profile
+        }
+        if let fmt = patch.outputFormat {
+            settings.outputFormat = fmt
+            preferences.outputFormat = fmt
+        }
+        if let q = patch.quality {
+            let clamped = max(0.5, min(1.0, q))
+            settings.quality = clamped
+            preferences.quality = clamped
+        }
+        if let previewComp = patch.previewCompressionEnabled {
+            settings.previewCompressionEnabled = previewComp
+        }
+        if patch.resetSoftwareTone == true {
+            settings.toneAdjustments = ToneAdjustments()
+        } else if let tone = patch.toneAdjustments {
+            settings.toneAdjustments = ToneAdjustments(
+                blackPoint: max(0.0, min(0.25, tone.blackPoint)),
+                whitePoint: max(0.75, min(1.0, tone.whitePoint)),
+                gamma: max(0.5, min(2.0, tone.gamma))
+            )
+        }
+        if let autoInc = patch.autoIncrement {
+            settings.autoIncrement = autoInc
+            preferences.autoIncrement = autoInc
+        }
+
+        guard settings != oldSettings else { return }
+        broadcastSnapshot()
+
+        if patch.affectsDisplayRendering {
+            reRenderActiveView()
+        }
+    }
+
+    func setSaveFolderURL(_ url: URL) {
+        saveFolderURL = url
+        preferences.saveFolderURL = url
+        broadcastSnapshot()
+    }
+
+    func setCropRect(_ rect: NormalizedCropRect) {
+        let clamped = rect.clamped()
+        guard clamped != cropRect else { return }
+        cropRect = clamped
+        broadcastSnapshot()
+    }
+
+    func resetCrop() {
+        setCropRect(.full)
+    }
+
+    func setViewMode(_ mode: CanvasViewMode) {
+        if mode == .scan && rawScanBuffer == nil { return }
+        guard mode != viewMode else { return }
+        viewMode = mode
+        broadcastSnapshot()
+        reRenderActiveView()
+    }
+
+    // MARK: - Scan, Preview, Export & Cancellation
+
+    func startPreview() {
+        startCapture(isPreview: true)
+    }
+
+    func startScan() {
+        startCapture(isPreview: false)
+    }
+
+    func cancelActiveOperation() {
+        activeTask?.cancel()
+        activeTask = nil
+    }
+
+    private func beginPowerAssertion(reason: String) {
+        endPowerAssertion()
+        activePowerActivity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .idleSystemSleepDisabled],
+            reason: reason
+        )
+    }
+
+    private func endPowerAssertion() {
+        if let activity = activePowerActivity {
+            ProcessInfo.processInfo.endActivity(activity)
+            activePowerActivity = nil
+        }
+    }
+
+    private func startCapture(isPreview: Bool) {
+        guard !isBusy, let scanner = selectedScanner else { return }
+
+        let source: ScanInputSource = isPreview ? .platen : settings.inputSource
+        let inputCaps = capabilities?.caps(for: source) ?? capabilities?.platen
+        let maxW = inputCaps?.maxWidth ?? 2550
+        let maxH = inputCaps?.maxHeight ?? 3300
+
+        let resolution: Int
+        if isPreview {
+            let available = inputCaps?.discreteResolutions ?? [75, 100, 200, 300]
+            resolution = available.contains(100) ? 100 : (available.first ?? 75)
+        } else {
+            resolution = settings.resolution
+        }
+
+        let crop: NormalizedCropRect = (isPreview || source == .feeder) ? .full : cropRect
+        let region = crop.toESCLRegion(maxWidth: maxW, maxHeight: maxH)
+
+        let transfer: TransferFormat
+        if isPreview {
+            transfer = (inputCaps?.supportsRawOctetStream ?? true) ? .rawOctetStream : .jpeg
+        } else {
+            transfer = settings.transferFormat
+        }
+
+        let request = ScanJobRequest(
+            version: capabilities?.version ?? "2.5",
+            inputSource: source,
+            resolution: resolution,
+            colorMode: settings.colorMode,
+            intent: settings.intent,
+            isPreview: false,
+            transferFormat: transfer,
+            region: region,
+            brightness: effectiveHardwareBrightness,
+            contrast: effectiveHardwareContrast
+        )
+
+        let capturedSettings = settings
+        let folderURL = saveFolderURL
+        let makeAndModel = capabilities?.makeAndModel ?? scanner.displayTitle
+        let op: CompanionOperation = isPreview ? .preview : .scan
+
+        isBusy = true
+        activeOperation = op
+        isErrorStatus = false
+        let startTime = CFAbsoluteTimeGetCurrent()
+        let labelPrefix = isPreview ? "Previewing" : "Scanning \(resolution) DPI"
+        statusText = "\(labelPrefix)…"
+        beginPowerAssertion(reason: isPreview ? "ChromaScan flatbed preview" : "ChromaScan active scan (\(resolution) DPI)")
+        broadcastSnapshot()
+        emit(.progress(operation: op, bytesReceived: 0, expectedBytes: request.transferFormat == .rawOctetStream ? request.expectedRawByteCount : 0, elapsedSeconds: 0, statusText: statusText))
+
+        activeTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.endPowerAssertion() }
+            do {
+                let download = try await self.client.performScan(scanner: scanner, request: request) { [weak self] recv, expected in
+                    let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+                    Task { @MainActor [weak self] in
+                        guard let self, self.isBusy else { return }
+                        let recvMB = Double(recv) / (1024.0 * 1024.0)
+                        let status: String
+                        if expected > 0 {
+                            let expMB = Double(expected) / (1024.0 * 1024.0)
+                            status = String(format: "%@ · %.1f / %.1f MB (%.0fs)", labelPrefix, recvMB, expMB, elapsed)
+                        } else {
+                            status = String(format: "%@ · %.1f MB (%.0fs)", labelPrefix, recvMB, elapsed)
+                        }
+                        self.statusText = status
+                        self.emit(.progress(operation: op, bytesReceived: recv, expectedBytes: expected, elapsedSeconds: elapsed, statusText: status))
+                    }
+                }
+
+                try Task.checkCancellation()
+
+                if isPreview {
+                    self.statusText = "Rendering preview…"
+                    self.emit(.progress(operation: .preview, bytesReceived: Int64(download.data.count), expectedBytes: Int64(download.data.count), elapsedSeconds: CFAbsoluteTimeGetCurrent() - startTime, statusText: self.statusText))
+
+                    let rawBuf = try await Task.detached(priority: .userInitiated) {
+                        try ImagePipeline.decodeToRawBuffer(download: download, request: request)
+                    }.value
+
+                    try Task.checkCancellation()
+
+                    self.rawPreviewBuffer = rawBuf
+                    self.platenAspectRatio = Double(rawBuf.width) / Double(max(1, rawBuf.height))
+                    self.viewMode = .preview
+                    self.isBusy = false
+                    self.activeOperation = nil
+                    let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+                    self.statusText = String(format: "Preview ready (%dx%d · %.1fs)", rawBuf.width, rawBuf.height, elapsed)
+                    self.isErrorStatus = false
+                    self.broadcastSnapshot()
+                    self.reRenderActiveView()
+                } else {
+                    self.statusText = "Processing & saving (\(capturedSettings.colorProfile.shortName))…"
+                    self.emit(.progress(operation: .scan, bytesReceived: Int64(download.data.count), expectedBytes: Int64(download.data.count), elapsedSeconds: CFAbsoluteTimeGetCurrent() - startTime, statusText: self.statusText))
+
+                    let exportSettings = ExportSettings(
+                        rotation: capturedSettings.rotation,
+                        colorProfile: capturedSettings.colorProfile,
+                        toneAdjustments: capturedSettings.toneAdjustments,
+                        format: capturedSettings.outputFormat,
+                        quality: capturedSettings.quality,
+                        scannerMakeAndModel: makeAndModel
+                    )
+                    let destURL = FilenameHelper.uniqueDestinationURL(
+                        in: folderURL,
+                        baseName: capturedSettings.baseFilename,
+                        ext: capturedSettings.outputFormat.fileExtension
+                    )
+                    let sig = RenderSignature(
+                        rotation: capturedSettings.rotation,
+                        colorProfile: capturedSettings.colorProfile,
+                        toneAdjustments: capturedSettings.toneAdjustments
+                    )
+
+                    let (rawBuf, proxyBuf, fullCG, fileSize) = try await Task.detached(priority: .userInitiated) {
+                        let rawBuf = try ImagePipeline.decodeToRawBuffer(download: download, request: request)
+                        let cgImg = try ImagePipeline.renderCGImage(
+                            from: rawBuf,
+                            rotation: exportSettings.rotation,
+                            colorProfile: exportSettings.colorProfile,
+                            toneAdjustments: exportSettings.toneAdjustments
+                        )
+                        try ImagePipeline.export(cgImage: cgImg, dpi: rawBuf.dpi, settings: exportSettings, to: destURL)
+                        let attrs = try? FileManager.default.attributesOfItem(atPath: destURL.path)
+                        let bytes = (attrs?[.size] as? Int64) ?? 0
+                        let proxy = ImagePipeline.makeProxyBuffer(from: rawBuf, maxDimension: 2200)
+                        return (rawBuf, proxy, cgImg, bytes)
+                    }.value
+
+                    try Task.checkCancellation()
+
+                    self.rawScanBuffer = rawBuf
+                    self.rawScanProxyBuffer = proxyBuf
+                    self.renderedFullScanImage = fullCG
+                    self.fullScanRenderSignature = sig
+                    self.lastSavedURL = destURL
+
+                    if capturedSettings.autoIncrement {
+                        let nextName = FilenameHelper.incrementedFilename(capturedSettings.baseFilename)
+                        self.settings.baseFilename = nextName
+                        self.preferences.baseFilename = nextName
+                    }
+
+                    self.isBusy = false
+                    self.activeOperation = nil
+                    self.viewMode = .scan
+                    let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+                    let mb = Double(fileSize) / (1024.0 * 1024.0)
+                    self.statusText = String(format: "Saved %@ (%dx%d · %.1f MB · %.1fs)", destURL.lastPathComponent, fullCG.width, fullCG.height, mb, elapsed)
+                    self.isErrorStatus = false
+                    self.broadcastSnapshot()
+                    self.emit(.scanCompleted(url: destURL, pixelWidth: fullCG.width, pixelHeight: fullCG.height, fileSizeBytes: fileSize, elapsedSeconds: elapsed))
+                    self.reRenderActiveView()
+                }
+            } catch ESCLClientError.cancelled {
+                self.isBusy = false
+                self.activeOperation = nil
+                self.statusText = "Scan cancelled"
+                self.isErrorStatus = false
+                self.broadcastSnapshot()
+            } catch is CancellationError {
+                self.isBusy = false
+                self.activeOperation = nil
+                self.statusText = "Scan cancelled"
+                self.isErrorStatus = false
+                self.broadcastSnapshot()
+            } catch {
+                self.isBusy = false
+                self.activeOperation = nil
+                self.statusText = error.localizedDescription
+                self.isErrorStatus = true
+                self.broadcastSnapshot()
+                self.emit(.error(title: "Scan Failed", message: error.localizedDescription))
+            }
+        }
+    }
+
+    func exportCurrentScan(to customURL: URL? = nil) {
+        guard !isBusy, let rawBuf = rawScanBuffer else { return }
+
+        let capturedSettings = settings
+        let folderURL = saveFolderURL
+        let autoInc = capturedSettings.autoIncrement && customURL == nil
+        let makeAndModel = capabilities?.makeAndModel ?? selectedScanner?.displayTitle
+
+        let destURL = customURL ?? FilenameHelper.uniqueDestinationURL(
+            in: folderURL,
+            baseName: capturedSettings.baseFilename,
+            ext: capturedSettings.outputFormat.fileExtension
+        )
+
+        let sig = RenderSignature(
+            rotation: capturedSettings.rotation,
+            colorProfile: capturedSettings.colorProfile,
+            toneAdjustments: capturedSettings.toneAdjustments
+        )
+        let cachedCG = (fullScanRenderSignature == sig) ? renderedFullScanImage : nil
+
+        let exportSettings = ExportSettings(
+            rotation: capturedSettings.rotation,
+            colorProfile: capturedSettings.colorProfile,
+            toneAdjustments: capturedSettings.toneAdjustments,
+            format: capturedSettings.outputFormat,
+            quality: capturedSettings.quality,
+            scannerMakeAndModel: makeAndModel
+        )
+
+        isBusy = true
+        activeOperation = .export
+        isErrorStatus = false
+        let startTime = CFAbsoluteTimeGetCurrent()
+        statusText = "Exporting \(destURL.lastPathComponent)…"
+        beginPowerAssertion(reason: "ChromaScan export")
+        broadcastSnapshot()
+        emit(.progress(operation: .export, bytesReceived: 0, expectedBytes: 0, elapsedSeconds: 0, statusText: statusText))
+
+        activeTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.endPowerAssertion() }
+            do {
+                let (fullCG, fileSize) = try await Task.detached(priority: .userInitiated) {
+                    let cgImg: CGImage
+                    if let cachedCG {
+                        cgImg = cachedCG
+                    } else {
+                        cgImg = try ImagePipeline.renderCGImage(
+                            from: rawBuf,
+                            rotation: exportSettings.rotation,
+                            colorProfile: exportSettings.colorProfile,
+                            toneAdjustments: exportSettings.toneAdjustments
+                        )
+                    }
+                    try ImagePipeline.export(cgImage: cgImg, dpi: rawBuf.dpi, settings: exportSettings, to: destURL)
+                    let attrs = try? FileManager.default.attributesOfItem(atPath: destURL.path)
+                    let bytes = (attrs?[.size] as? Int64) ?? 0
+                    return (cgImg, bytes)
+                }.value
+
+                self.renderedFullScanImage = fullCG
+                self.fullScanRenderSignature = sig
+                self.lastSavedURL = destURL
+                if autoInc {
+                    let nextName = FilenameHelper.incrementedFilename(capturedSettings.baseFilename)
+                    self.settings.baseFilename = nextName
+                    self.preferences.baseFilename = nextName
+                }
+                self.isBusy = false
+                self.activeOperation = nil
+                let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+                let mb = Double(fileSize) / (1024.0 * 1024.0)
+                self.statusText = String(format: "Exported %@ (%.1f MB · %.2fs)", destURL.lastPathComponent, mb, elapsed)
+                self.isErrorStatus = false
+                self.broadcastSnapshot()
+                self.emit(.exportCompleted(url: destURL, fileSizeBytes: fileSize, elapsedSeconds: elapsed))
+            } catch {
+                self.isBusy = false
+                self.activeOperation = nil
+                self.statusText = error.localizedDescription
+                self.isErrorStatus = true
+                self.broadcastSnapshot()
+                self.emit(.error(title: "Export Failed", message: error.localizedDescription))
+            }
+        }
+    }
+
+    // MARK: - Live Display & Full-Res Background Rendering
+
+    func reRenderActiveView() {
+        let activeSource: RawImageBuffer?
+        let trueBuf: RawImageBuffer?
+        let imageKind: CompanionImageKind
+        switch viewMode {
+        case .preview:
+            activeSource = rawPreviewBuffer
+            trueBuf = rawPreviewBuffer
+            imageKind = .previewProxy
+        case .scan:
+            activeSource = rawScanProxyBuffer ?? rawScanBuffer
+            trueBuf = rawScanBuffer
+            imageKind = .scanProxy
+        }
+
+        guard let sourceBuf = activeSource, let fullBuf = trueBuf else {
+            renderedDisplayImage = nil
+            renderedDisplayTrueSize = .zero
+            outputPreviewSummary = ""
+            broadcastSnapshot()
+            return
+        }
+
+        let captured = settings
+        let simulateCompression = captured.previewCompressionEnabled && captured.outputFormat.supportsQuality
+        let sig = RenderSignature(
+            rotation: captured.rotation,
+            colorProfile: captured.colorProfile,
+            toneAdjustments: captured.toneAdjustments
+        )
+
+        let trueRotatedSize: CGSize = (captured.rotation == .deg90 || captured.rotation == .deg270)
+            ? CGSize(width: fullBuf.height, height: fullBuf.width)
+            : CGSize(width: fullBuf.width, height: fullBuf.height)
+
+        activeImageGeneration &+= 1
+        let gen = activeImageGeneration
+
+        // 1. Fast proxy / preview render
+        previewRenderTask?.cancel()
+        previewRenderTask = Task.detached(priority: .userInitiated) { [weak self] in
+            if Task.isCancelled { return }
+            guard let baseImg = try? ImagePipeline.renderCGImage(
+                from: sourceBuf,
+                rotation: captured.rotation,
+                colorProfile: captured.colorProfile,
+                toneAdjustments: captured.toneAdjustments
+            ) else { return }
+            if Task.isCancelled { return }
+
+            var displayImg = baseImg
+            var summary: String
+            let profileLabel = (sourceBuf.colorMode == .grayscale8) ? "Grayscale" : captured.colorProfile.shortName
+
+            if simulateCompression,
+               let sim = ImagePipeline.simulateLossyFormat(cgImage: baseImg, format: captured.outputFormat, quality: captured.quality) {
+                displayImg = sim.image
+                let proxyPixels = Double(max(1, baseImg.width * baseImg.height))
+                let fullPixels = Double(max(1, Int(trueRotatedSize.width * trueRotatedSize.height)))
+                let estBytes = Double(sim.encodedBytes) * (fullPixels / proxyPixels)
+                let estMB = estBytes / (1024.0 * 1024.0)
+                let sizeText = estMB >= 1.0 ? String(format: "~%.1f MB", estMB) : String(format: "~%.0f KB", estBytes / 1024.0)
+                let qPct = Int((captured.quality * 100).rounded())
+                summary = "Live: \(profileLabel) · \(captured.outputFormat.displayName) \(qPct)% (\(sizeText) est.)"
+            } else {
+                let rawMB = Double(fullBuf.width * fullBuf.height * fullBuf.colorMode.bytesPerPixel) / (1024.0 * 1024.0)
+                let fmtSuffix = captured.outputFormat.supportsQuality
+                    ? "\(captured.outputFormat.displayName) (compression preview off)"
+                    : "\(captured.outputFormat.displayName) · ~\(Int(rawMB.rounded())) MB raw"
+                summary = "Live: \(profileLabel) · \(fmtSuffix)"
+            }
+
+            if Task.isCancelled { return }
+            await MainActor.run { [weak self] in
+                guard let self, self.activeImageGeneration == gen else { return }
+                self.renderedDisplayImage = displayImg
+                self.renderedDisplayTrueSize = trueRotatedSize
+                self.renderedDisplayDPI = fullBuf.dpi
+                self.outputPreviewSummary = summary
+                self.emit(.displayImageUpdated(
+                    image: displayImg,
+                    truePixelSize: trueRotatedSize,
+                    summary: summary,
+                    generation: gen,
+                    kind: imageKind,
+                    dpi: fullBuf.dpi
+                ))
+            }
+        }
+
+        // 2. Keep full-res rendered CGImage fresh in Scan mode
+        if viewMode == .scan, let rawScan = rawScanBuffer, fullScanRenderSignature != sig {
+            fullScanRenderTask?.cancel()
+            fullScanRenderTask = Task.detached(priority: .utility) { [weak self] in
+                if Task.isCancelled { return }
+                guard let fullCG = try? ImagePipeline.renderCGImage(
+                    from: rawScan,
+                    rotation: captured.rotation,
+                    colorProfile: captured.colorProfile,
+                    toneAdjustments: captured.toneAdjustments
+                ) else { return }
+                if Task.isCancelled { return }
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.renderedFullScanImage = fullCG
+                    self.fullScanRenderSignature = sig
+                    self.emit(.fullScanImageReady(fullCG))
+                }
+            }
+        }
+    }
+
+    // MARK: - Companion Encoding APIs (Proxy, 1:1 High-Res Tile, Photos Copy)
+
+    func encodeActiveProxy(preferHEIC: Bool = true, quality: Double = 0.88) async -> EncodedCompanionImage? {
+        guard let img = renderedDisplayImage else { return nil }
+        let kind: CompanionImageKind = (viewMode == .scan) ? .scanProxy : .previewProxy
+        let gen = activeImageGeneration
+        let trueW = Int(renderedDisplayTrueSize.width) > 0 ? Int(renderedDisplayTrueSize.width) : img.width
+        let trueH = Int(renderedDisplayTrueSize.height) > 0 ? Int(renderedDisplayTrueSize.height) : img.height
+        let dpi = renderedDisplayDPI
+        let summary = outputPreviewSummary
+
+        return await Task.detached(priority: .userInitiated) {
+            guard let data = ImagePipeline.encodeCompanionImage(
+                cgImage: img,
+                preferHEIC: preferHEIC,
+                quality: quality,
+                dpi: dpi
+            ) else { return nil }
+            let info = CompanionImageReadyInfo(
+                kind: kind,
+                generation: gen,
+                requestID: 0,
+                width: img.width,
+                height: img.height,
+                trueWidth: trueW,
+                trueHeight: trueH,
+                dpi: dpi,
+                normalizedRect: nil,
+                summaryText: summary
+            )
+            return EncodedCompanionImage(info: info, data: data)
+        }.value
+    }
+
+    func encodeHighResTile(
+        requestID: UInt32,
+        normalizedRect: NormalizedCropRect,
+        maxPixelWidth: Int,
+        preferHEIC: Bool = true
+    ) async -> EncodedCompanionImage? {
+        guard viewMode == .scan, let rawScan = rawScanBuffer else { return nil }
+
+        let captured = settings
+        let gen = activeImageGeneration
+        let dpi = rawScan.dpi
+        let summary = outputPreviewSummary
+        let sig = RenderSignature(
+            rotation: captured.rotation,
+            colorProfile: captured.colorProfile,
+            toneAdjustments: captured.toneAdjustments
+        )
+
+        let existingFull: CGImage?
+        if fullScanRenderSignature == sig, let cg = renderedFullScanImage {
+            existingFull = cg
+        } else {
+            existingFull = nil
+        }
+
+        let simFormat: OutputFormat? = (captured.previewCompressionEnabled && captured.outputFormat.supportsQuality)
+            ? captured.outputFormat
+            : nil
+        let simQuality = captured.quality
+
+        return await Task.detached(priority: .userInitiated) {
+            let fullCG: CGImage
+            if let existingFull {
+                fullCG = existingFull
+            } else if let rendered = try? ImagePipeline.renderCGImage(
+                from: rawScan,
+                rotation: captured.rotation,
+                colorProfile: captured.colorProfile,
+                toneAdjustments: captured.toneAdjustments
+            ) {
+                fullCG = rendered
+            } else {
+                return nil
+            }
+
+            guard let tile = ImagePipeline.cropAndEncodeTile(
+                from: fullCG,
+                normalizedRect: normalizedRect,
+                maxPixelWidth: maxPixelWidth,
+                simulateFormat: simFormat,
+                simulateQuality: simQuality,
+                preferHEIC: preferHEIC
+            ) else {
+                return nil
+            }
+
+            let info = CompanionImageReadyInfo(
+                kind: .highResTile,
+                generation: gen,
+                requestID: requestID,
+                width: tile.width,
+                height: tile.height,
+                trueWidth: fullCG.width,
+                trueHeight: fullCG.height,
+                dpi: dpi,
+                normalizedRect: tile.exactNormalizedRect,
+                summaryText: summary
+            )
+            return EncodedCompanionImage(info: info, data: tile.data)
+        }.value
+    }
+
+    func encodePhotosCopy(
+        requestID: UInt32,
+        format: OutputFormat,
+        quality: Double
+    ) async -> EncodedCompanionImage? {
+        guard let rawScan = rawScanBuffer else { return nil }
+        let captured = settings
+        let gen = activeImageGeneration
+        let dpi = rawScan.dpi
+        let sig = RenderSignature(
+            rotation: captured.rotation,
+            colorProfile: captured.colorProfile,
+            toneAdjustments: captured.toneAdjustments
+        )
+        let existingFull = (fullScanRenderSignature == sig) ? renderedFullScanImage : nil
+        let preferHEIC = (format != .jpeg)
+
+        return await Task.detached(priority: .userInitiated) {
+            let fullCG: CGImage
+            if let existingFull {
+                fullCG = existingFull
+            } else if let rendered = try? ImagePipeline.renderCGImage(
+                from: rawScan,
+                rotation: captured.rotation,
+                colorProfile: captured.colorProfile,
+                toneAdjustments: captured.toneAdjustments
+            ) {
+                fullCG = rendered
+            } else {
+                return nil
+            }
+
+            guard let data = ImagePipeline.encodeCompanionImage(
+                cgImage: fullCG,
+                preferHEIC: preferHEIC,
+                quality: quality,
+                dpi: dpi
+            ) else { return nil }
+
+            let info = CompanionImageReadyInfo(
+                kind: .photosCopy,
+                generation: gen,
+                requestID: requestID,
+                width: fullCG.width,
+                height: fullCG.height,
+                trueWidth: fullCG.width,
+                trueHeight: fullCG.height,
+                dpi: dpi,
+                normalizedRect: nil,
+                summaryText: "Photos Copy (\(fullCG.width)×\(fullCG.height))"
+            )
+            return EncodedCompanionImage(info: info, data: data)
+        }.value
+    }
+
+    // MARK: - Testing Support (Seed buffers without needing a physical scanner)
+
+    func loadSyntheticBuffersForTesting(preview: RawImageBuffer?, scan: RawImageBuffer?) {
+        self.rawPreviewBuffer = preview
+        if let preview {
+            self.platenAspectRatio = Double(preview.width) / Double(max(1, preview.height))
+        }
+        self.rawScanBuffer = scan
+        if let scan {
+            self.rawScanProxyBuffer = ImagePipeline.makeProxyBuffer(from: scan, maxDimension: 2200)
+        } else {
+            self.rawScanProxyBuffer = nil
+        }
+        self.renderedFullScanImage = nil
+        self.fullScanRenderSignature = nil
+        self.broadcastSnapshot()
+        self.reRenderActiveView()
+    }
+}

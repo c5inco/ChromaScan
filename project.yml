@@ -3,15 +3,13 @@ options:
   bundleIdPrefix: com.chromascan
   deploymentTarget:
     macOS: "14.0"
+    iOS: "17.0"
   xcodeVersion: "16.0"
   createIntermediateGroups: true
 
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    MACOSX_DEPLOYMENT_TARGET: "14.0"
-    ENABLE_HARDENED_RUNTIME: NO
-    CODE_SIGN_IDENTITY: "-"
     CODE_SIGN_STYLE: Automatic
     DEAD_CODE_STRIPPING: YES
 
@@ -20,7 +18,8 @@ targets:
     type: application
     platform: macOS
     sources:
-      - path: Sources
+      - path: Sources/Core
+      - path: Sources/MacHost
       - path: Resources/Assets.xcassets
     info:
       path: Resources/Info.plist
@@ -34,26 +33,88 @@ targets:
         LSMinimumSystemVersion: "14.0"
         NSHighResolutionCapable: true
         NSPrincipalClass: NSApplication
-        NSLocalNetworkUsageDescription: "ChromaScan discovers and communicates with Wi-Fi eSCL scanners on your local network."
+        NSLocalNetworkUsageDescription: "ChromaScan discovers Wi-Fi eSCL scanners and pairs with the ChromaScan iPhone Companion on your local network."
         NSBonjourServices:
           - "_uscan._tcp"
           - "_uscans._tcp"
+          - "_chromascan._tcp"
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
     settings:
       base:
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        ENABLE_HARDENED_RUNTIME: NO
+        CODE_SIGN_IDENTITY: "-"
         PRODUCT_BUNDLE_IDENTIFIER: com.chromascan.app
         INFOPLIST_FILE: Resources/Info.plist
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 
+  ChromaScanRemote:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/Core
+      - path: Sources/iOSCompanion
+      - path: Resources/Assets.xcassets
+    info:
+      path: Resources/iOSInfo.plist
+      properties:
+        CFBundleDisplayName: ChromaScan
+        CFBundleShortVersionString: "1.0.0"
+        CFBundleVersion: "1"
+        LSRequiresIPhoneOS: true
+        NSLocalNetworkUsageDescription: "ChromaScan Companion discovers and connects to your Mac running ChromaScan on your local network."
+        NSBonjourServices:
+          - "_chromascan._tcp"
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSPhotoLibraryAddUsageDescription: "ChromaScan Companion saves Display P3 copies of scans to your Photos library when requested."
+        UILaunchScreen: {}
+        UIRequiresFullScreen: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    settings:
+      base:
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        DEVELOPMENT_TEAM: FXB7YX3ZD4
+        PRODUCT_BUNDLE_IDENTIFIER: com.chromascan.remote
+        PRODUCT_NAME: ChromaScanRemote
+        INFOPLIST_FILE: Resources/iOSInfo.plist
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        GENERATE_INFOPLIST_FILE: NO
+
   ChromaScanTests:
     type: bundle.unit-test
     platform: macOS
     sources:
-      - path: Tests
+      - path: Tests/MacTests
     dependencies:
       - target: ChromaScan
     settings:
       base:
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        CODE_SIGN_IDENTITY: "-"
+        GENERATE_INFOPLIST_FILE: YES
+
+  ChromaScanRemoteTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/iOSTests
+    dependencies:
+      - target: ChromaScanRemote
+    settings:
+      base:
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        DEVELOPMENT_TEAM: FXB7YX3ZD4
         GENERATE_INFOPLIST_FILE: YES

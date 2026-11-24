@@ -590,4 +590,108 @@ enum ImagePipeline {
             dpi: max(1, Int((Double(raw.dpi) * scale).rounded()))
         )
     }
+
+    // MARK: - Companion Image & 1:1 Tile Encoding (Display P3 / sRGB ICC Preserved)
+
+    /// Encodes a CGImage into compact HEIC (preferred) or JPEG bytes preserving embedded Display P3 / sRGB ICC profile.
+    static func encodeCompanionImage(
+        cgImage: CGImage,
+        preferHEIC: Bool = true,
+        quality: Double = 0.88,
+        dpi: Int? = nil
+    ) -> Data? {
+        let clampedQ = max(0.1, min(1.0, quality))
+        var props: [CFString: Any] = [
+            kCGImageDestinationLossyCompressionQuality: clampedQ
+        ]
+        if let dpi, dpi > 0 {
+            props[kCGImagePropertyDPIWidth] = dpi
+            props[kCGImagePropertyDPIHeight] = dpi
+        }
+
+        let utis: [String] = preferHEIC ? ["public.heic", "public.jpeg"] : ["public.jpeg", "public.heic"]
+        for uti in utis {
+            let mutableData = NSMutableData()
+            guard let dest = CGImageDestinationCreateWithData(mutableData as CFMutableData, uti as CFString, 1, nil) else {
+                continue
+            }
+            CGImageDestinationAddImage(dest, cgImage, props as CFDictionary)
+            if CGImageDestinationFinalize(dest), mutableData.length > 0 {
+                return mutableData as Data
+            }
+        }
+        return nil
+    }
+
+    /// Crops a visible 1:1 pixel tile from `fullCG`, optionally applies lossy compression preview and optional max-width scaling,
+    /// then encodes as HEIC/JPEG with the exact pixel-snapped normalized rect.
+    static func cropAndEncodeTile(
+        from fullCG: CGImage,
+        normalizedRect: NormalizedCropRect,
+        maxPixelWidth: Int,
+        simulateFormat: OutputFormat?,
+        simulateQuality: Double,
+        preferHEIC: Bool = true
+    ) -> (data: Data, width: Int, height: Int, exactNormalizedRect: NormalizedCropRect)? {
+        let clamped = normalizedRect.clamped(minSize: 0.005)
+        let fw = Double(fullCG.width)
+        let fh = Double(fullCG.height)
+
+        let pxX = max(0, Int((clamped.x * fw).rounded(.down)))
+        let pxY = max(0, Int((clamped.y * fh).rounded(.down)))
+        let pxMaxX = min(fullCG.width, Int(((clamped.x + clamped.width) * fw).rounded(.up)))
+        let pxMaxY = min(fullCG.height, Int(((clamped.y + clamped.height) * fh).rounded(.up)))
+        let pxW = pxMaxX - pxX
+        let pxH = pxMaxY - pxY
+        guard pxW > 4, pxH > 4 else { return nil }
+        guard pxW * pxH <= 24_000_000 else { return nil }
+
+        let cropRectPx = CGRect(x: pxX, y: pxY, width: pxW, height: pxH)
+        guard let cropped = fullCG.cropping(to: cropRectPx) else { return nil }
+
+        let simulated: CGImage
+        if let format = simulateFormat, format.supportsQuality,
+           let sim = simulateLossyFormat(cgImage: cropped, format: format, quality: simulateQuality) {
+            simulated = sim.image
+        } else {
+            simulated = cropped
+        }
+
+        let targetImage: CGImage
+        if maxPixelWidth > 0 && simulated.width > maxPixelWidth {
+            let scale = Double(maxPixelWidth) / Double(simulated.width)
+            let dstW = max(1, maxPixelWidth)
+            let dstH = max(1, Int((Double(simulated.height) * scale).rounded()))
+            if let cs = simulated.colorSpace,
+               let ctx = CGContext(
+                data: nil,
+                width: dstW,
+                height: dstH,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: cs,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+               ) {
+                ctx.interpolationQuality = .high
+                ctx.draw(simulated, in: CGRect(x: 0, y: 0, width: dstW, height: dstH))
+                targetImage = ctx.makeImage() ?? simulated
+            } else {
+                targetImage = simulated
+            }
+        } else {
+            targetImage = simulated
+        }
+
+        guard let encoded = encodeCompanionImage(cgImage: targetImage, preferHEIC: preferHEIC, quality: 0.90) else {
+            return nil
+        }
+
+        let exactNorm = NormalizedCropRect(
+            x: Double(pxX) / fw,
+            y: Double(pxY) / fh,
+            width: Double(pxW) / fw,
+            height: Double(pxH) / fh
+        )
+        return (encoded, targetImage.width, targetImage.height, exactNorm)
+    }
 }

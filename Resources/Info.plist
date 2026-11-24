@@ -31,11 +31,12 @@
 	<array>
 		<string>_uscan._tcp</string>
 		<string>_uscans._tcp</string>
+		<string>_chromascan._tcp</string>
 	</array>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>ChromaScan discovers and communicates with Wi-Fi eSCL scanners on your local network.</string>
+	<string>ChromaScan discovers Wi-Fi eSCL scanners and pairs with the ChromaScan iPhone Companion on your local network.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

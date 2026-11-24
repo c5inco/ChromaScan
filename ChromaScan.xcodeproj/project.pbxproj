@@ -7,23 +7,50 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		357CA50E5BC04002DC180E33 /* PreviewCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09C788B960683671C8731D1D /* PreviewCanvasView.swift */; };
-		3777A9D5C4300F90ADE25014 /* ESCLClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B96256D4AA4F2A336FAD3292 /* ESCLClient.swift */; };
-		3C5AF3E18D81A483CC18EA90 /* MainWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27D1CC93F441E20AC936972E /* MainWindowController.swift */; };
-		40D5D6A19E2FF2BC80081390 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1CD3F56B5CCACF3EF38F4BD /* AppDelegate.swift */; };
-		58F027C60FA68DA065C93182 /* StatusFooterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F735D4B0B3857A8F2FBEC71 /* StatusFooterView.swift */; };
-		5A0214729615C8F8EEC5F536 /* ESCLXMLParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2D9308B251CDF8EE922F20C /* ESCLXMLParser.swift */; };
-		6561BC850FEBB9870BE3254A /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B19882871C988E07BD23904 /* Models.swift */; };
-		7265999D4F6932C0E742D077 /* BonjourScannerBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD0EC4192389920D63B3CD25 /* BonjourScannerBrowser.swift */; };
-		7A14094FC49D5E75461466B7 /* AppPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = B24C554B9077C7CA0C3CCD56 /* AppPreferences.swift */; };
-		9A9BF38E374E7F18BA9CE4A7 /* ImagePipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B8FD367ABBCA6ACED2ECA1B /* ImagePipeline.swift */; };
-		A0B054F8D64C6F5A055DEA25 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF1E9870B219F0D376AE8893 /* main.swift */; };
+		011F56D29AC65B386A49B6CC /* CompanionProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACA80DFF7134A8F9353D758D /* CompanionProtocolTests.swift */; };
+		0154233DA50988DB0968F645 /* AppPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC908B070D72FD1B449890DF /* AppPreferences.swift */; };
+		0648D61225A83EF93855A2AB /* CompanionServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1849ED5E95E3BBD516425D8 /* CompanionServer.swift */; };
+		11FD81D50B61DC27E7D4213F /* ChromaScanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28B7DDC16C1A43320CD832EA /* ChromaScanTests.swift */; };
+		29A07F96D77C65D903F68939 /* RemoteCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D561A0EB2551C5F08C66BB1 /* RemoteCanvasView.swift */; };
+		2AFECF505E34937F5183E306 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D1C6303D0EB2670D0032443 /* Models.swift */; };
+		30F36BD3E7DB48827ABF656E /* ScanSessionEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7923524F2BBDBCC3B11F02E7 /* ScanSessionEngineTests.swift */; };
+		41309C77EE80B6B07D890901 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4A9DF072E7C165CCFC6E3DF /* PairingView.swift */; };
+		415E94AE39803C647D8E0775 /* MainWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A6C658899A253C7E75AA58D /* MainWindowController.swift */; };
+		41ACFD1D3674343DE4E16855 /* ImagePipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1EB34041D3A58F462DEC8D /* ImagePipeline.swift */; };
+		4628ADC11842974C3E8B7E7C /* StatusFooterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D98A6AA930BA3D0BA63AF64 /* StatusFooterView.swift */; };
+		4B1CCF09676DA81E2E2735C5 /* ESCLClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA537BB582A4E1675813DCA1 /* ESCLClient.swift */; };
+		4DE06D4A4DC15298827ADB24 /* BonjourScannerBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8A8CCE4993FB8C1DC395790 /* BonjourScannerBrowser.swift */; };
+		4F2FE15701683A8D22354D9E /* RemoteControlsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2771DBF41200CE845EE6B6F /* RemoteControlsSheet.swift */; };
+		60DE54F75DFB60592467EBA2 /* CompanionIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4F61D67F19D186B07A71C62 /* CompanionIntegrationTests.swift */; };
+		6531359E2300EA7F344530F6 /* ESCLXMLParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D7050506F4EE0F1C24D2F2B /* ESCLXMLParser.swift */; };
+		6CEAD245E8AEBF410FA257C4 /* RemoteSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72593C77880160F6004A175D /* RemoteSessionStore.swift */; };
+		8B911ECF48746BC1258E8FAE /* ChromaScanRemoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73346CA0F792B6BB11013BEA /* ChromaScanRemoteApp.swift */; };
+		9788333B17855C7A80EF872E /* InspectorViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 002E96AAA2062918C85A0069 /* InspectorViewController.swift */; };
 		A5EC77868953C56AFE7FB4DB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13AAE8EB20CC1850E90EA965 /* Assets.xcassets */; };
-		C70ED9301CA91D0D52AB6570 /* InspectorViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD2DB3AE02C44693F82E4360 /* InspectorViewController.swift */; };
-		FD07566BC9DB5F84CD3DF471 /* ChromaScanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BEFA72EF9493031747CF3B5 /* ChromaScanTests.swift */; };
+		AA2F6257A38EC92B2108D141 /* CompanionPopoverViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16E3F168FEE319DDE0BA2582 /* CompanionPopoverViewController.swift */; };
+		AA6565A91F0EE99D2B0EBAD2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13AAE8EB20CC1850E90EA965 /* Assets.xcassets */; };
+		AAC3792122EC81DBD3F873DA /* CompanionProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 144640D0594240C6D8FD1800 /* CompanionProtocol.swift */; };
+		AEC065521EBB177332590A42 /* HostBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCD4DEE9FB388A37E7113210 /* HostBrowser.swift */; };
+		B24CDE02159825DD12076450 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AA3D80B00290F84EDA6A08C /* AppDelegate.swift */; };
+		B4EE293F9286CE9D44B5C202 /* CompanionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2C164A02E047BE51616C98A /* CompanionClient.swift */; };
+		B546D55F3440DDD4FD633D0A /* CompanionProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 144640D0594240C6D8FD1800 /* CompanionProtocol.swift */; };
+		BC5F30AC44476441713F0933 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8891F199ADA7F2525ABAFB38 /* main.swift */; };
+		C4B6CF12C214E7C49E78EB3D /* ChromaScanRemoteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 402CE49A4AC2D4FC925AEB05 /* ChromaScanRemoteTests.swift */; };
+		D8BBA79C42F2BAD9D7BF2575 /* ScanSessionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AE8EBCB485313B1634CEE7A /* ScanSessionEngine.swift */; };
+		DC8D96F6F15D22163A06F084 /* RemoteWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CB280824279346BC069A3C6 /* RemoteWorkspaceView.swift */; };
+		E88BD7567A02468FB5C28DB6 /* ImagePipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1EB34041D3A58F462DEC8D /* ImagePipeline.swift */; };
+		EC0893452D92CFE990F24B8B /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D1C6303D0EB2670D0032443 /* Models.swift */; };
+		F2670C9B7D2BF2D1EC25B272 /* PreviewCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26DD1805F1D6F685488C90FD /* PreviewCanvasView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		9ECB16202D27DB8DBF357793 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 0FADBB0E82FC89979962D7EE /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = DF2EC1C9112DA53CCD3880BC;
+			remoteInfo = ChromaScanRemote;
+		};
 		E84EFFAE5FC9377B8D96B933 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 0FADBB0E82FC89979962D7EE /* Project object */;
@@ -34,31 +61,113 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		09C788B960683671C8731D1D /* PreviewCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewCanvasView.swift; sourceTree = "<group>"; };
-		0F735D4B0B3857A8F2FBEC71 /* StatusFooterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusFooterView.swift; sourceTree = "<group>"; };
+		002E96AAA2062918C85A0069 /* InspectorViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorViewController.swift; sourceTree = "<group>"; };
+		0CB280824279346BC069A3C6 /* RemoteWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteWorkspaceView.swift; sourceTree = "<group>"; };
+		0D98A6AA930BA3D0BA63AF64 /* StatusFooterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusFooterView.swift; sourceTree = "<group>"; };
 		13AAE8EB20CC1850E90EA965 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		1B19882871C988E07BD23904 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
-		1BEFA72EF9493031747CF3B5 /* ChromaScanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromaScanTests.swift; sourceTree = "<group>"; };
-		27D1CC93F441E20AC936972E /* MainWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowController.swift; sourceTree = "<group>"; };
-		4B8FD367ABBCA6ACED2ECA1B /* ImagePipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImagePipeline.swift; sourceTree = "<group>"; };
+		144640D0594240C6D8FD1800 /* CompanionProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionProtocol.swift; sourceTree = "<group>"; };
+		16E3F168FEE319DDE0BA2582 /* CompanionPopoverViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionPopoverViewController.swift; sourceTree = "<group>"; };
+		1AE8EBCB485313B1634CEE7A /* ScanSessionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanSessionEngine.swift; sourceTree = "<group>"; };
+		1D7050506F4EE0F1C24D2F2B /* ESCLXMLParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ESCLXMLParser.swift; sourceTree = "<group>"; };
+		26DD1805F1D6F685488C90FD /* PreviewCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewCanvasView.swift; sourceTree = "<group>"; };
+		28B7DDC16C1A43320CD832EA /* ChromaScanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromaScanTests.swift; sourceTree = "<group>"; };
+		3A6C658899A253C7E75AA58D /* MainWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowController.swift; sourceTree = "<group>"; };
+		3D561A0EB2551C5F08C66BB1 /* RemoteCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteCanvasView.swift; sourceTree = "<group>"; };
+		402CE49A4AC2D4FC925AEB05 /* ChromaScanRemoteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromaScanRemoteTests.swift; sourceTree = "<group>"; };
+		47B4A2AA2D7C02B03B7C4881 /* ChromaScanRemoteTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ChromaScanRemoteTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		5AA3D80B00290F84EDA6A08C /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		6BD54F5AA3038E12A62DBAC5 /* ChromaScanRemote.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = ChromaScanRemote.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		72593C77880160F6004A175D /* RemoteSessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSessionStore.swift; sourceTree = "<group>"; };
+		73346CA0F792B6BB11013BEA /* ChromaScanRemoteApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromaScanRemoteApp.swift; sourceTree = "<group>"; };
+		7923524F2BBDBCC3B11F02E7 /* ScanSessionEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanSessionEngineTests.swift; sourceTree = "<group>"; };
+		7D1C6303D0EB2670D0032443 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		8891F199ADA7F2525ABAFB38 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		8F97DF66CF11872FEEF7CF8E /* ChromaScan.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ChromaScan.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		90315FD2FE8CF98F7F823F14 /* ChromaScanTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ChromaScanTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		A1CD3F56B5CCACF3EF38F4BD /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
-		AD0EC4192389920D63B3CD25 /* BonjourScannerBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BonjourScannerBrowser.swift; sourceTree = "<group>"; };
-		B24C554B9077C7CA0C3CCD56 /* AppPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppPreferences.swift; sourceTree = "<group>"; };
-		B2D9308B251CDF8EE922F20C /* ESCLXMLParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ESCLXMLParser.swift; sourceTree = "<group>"; };
-		B96256D4AA4F2A336FAD3292 /* ESCLClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ESCLClient.swift; sourceTree = "<group>"; };
-		CF1E9870B219F0D376AE8893 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
-		DD2DB3AE02C44693F82E4360 /* InspectorViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorViewController.swift; sourceTree = "<group>"; };
+		AA1EB34041D3A58F462DEC8D /* ImagePipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImagePipeline.swift; sourceTree = "<group>"; };
+		ACA80DFF7134A8F9353D758D /* CompanionProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionProtocolTests.swift; sourceTree = "<group>"; };
+		D2771DBF41200CE845EE6B6F /* RemoteControlsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteControlsSheet.swift; sourceTree = "<group>"; };
+		D2C164A02E047BE51616C98A /* CompanionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionClient.swift; sourceTree = "<group>"; };
+		DCD4DEE9FB388A37E7113210 /* HostBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostBrowser.swift; sourceTree = "<group>"; };
+		E4F61D67F19D186B07A71C62 /* CompanionIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionIntegrationTests.swift; sourceTree = "<group>"; };
+		F1849ED5E95E3BBD516425D8 /* CompanionServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionServer.swift; sourceTree = "<group>"; };
+		F4A9DF072E7C165CCFC6E3DF /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
+		F8A8CCE4993FB8C1DC395790 /* BonjourScannerBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BonjourScannerBrowser.swift; sourceTree = "<group>"; };
+		FA537BB582A4E1675813DCA1 /* ESCLClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ESCLClient.swift; sourceTree = "<group>"; };
+		FC908B070D72FD1B449890DF /* AppPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppPreferences.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
+		06AB397FA7837600E45B08DC /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				144640D0594240C6D8FD1800 /* CompanionProtocol.swift */,
+				AA1EB34041D3A58F462DEC8D /* ImagePipeline.swift */,
+				7D1C6303D0EB2670D0032443 /* Models.swift */,
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
+		23EF23286CE7986F09E298FC /* iOSTests */ = {
+			isa = PBXGroup;
+			children = (
+				402CE49A4AC2D4FC925AEB05 /* ChromaScanRemoteTests.swift */,
+			);
+			path = iOSTests;
+			sourceTree = "<group>";
+		};
+		425E3A462956A056C7A87F00 /* MacHost */ = {
+			isa = PBXGroup;
+			children = (
+				5AA3D80B00290F84EDA6A08C /* AppDelegate.swift */,
+				FC908B070D72FD1B449890DF /* AppPreferences.swift */,
+				F8A8CCE4993FB8C1DC395790 /* BonjourScannerBrowser.swift */,
+				16E3F168FEE319DDE0BA2582 /* CompanionPopoverViewController.swift */,
+				F1849ED5E95E3BBD516425D8 /* CompanionServer.swift */,
+				FA537BB582A4E1675813DCA1 /* ESCLClient.swift */,
+				1D7050506F4EE0F1C24D2F2B /* ESCLXMLParser.swift */,
+				002E96AAA2062918C85A0069 /* InspectorViewController.swift */,
+				8891F199ADA7F2525ABAFB38 /* main.swift */,
+				3A6C658899A253C7E75AA58D /* MainWindowController.swift */,
+				26DD1805F1D6F685488C90FD /* PreviewCanvasView.swift */,
+				1AE8EBCB485313B1634CEE7A /* ScanSessionEngine.swift */,
+				0D98A6AA930BA3D0BA63AF64 /* StatusFooterView.swift */,
+			);
+			path = MacHost;
+			sourceTree = "<group>";
+		};
+		44DF574E2DEAC9F4E38FC55A /* iOSCompanion */ = {
+			isa = PBXGroup;
+			children = (
+				73346CA0F792B6BB11013BEA /* ChromaScanRemoteApp.swift */,
+				D2C164A02E047BE51616C98A /* CompanionClient.swift */,
+				DCD4DEE9FB388A37E7113210 /* HostBrowser.swift */,
+				F4A9DF072E7C165CCFC6E3DF /* PairingView.swift */,
+				3D561A0EB2551C5F08C66BB1 /* RemoteCanvasView.swift */,
+				D2771DBF41200CE845EE6B6F /* RemoteControlsSheet.swift */,
+				72593C77880160F6004A175D /* RemoteSessionStore.swift */,
+				0CB280824279346BC069A3C6 /* RemoteWorkspaceView.swift */,
+			);
+			path = iOSCompanion;
+			sourceTree = "<group>";
+		};
 		6441AE8D533E4D05E7AAD759 /* Resources */ = {
 			isa = PBXGroup;
 			children = (
 				13AAE8EB20CC1850E90EA965 /* Assets.xcassets */,
 			);
 			path = Resources;
+			sourceTree = "<group>";
+		};
+		89EDEC13EA32EFB3D2ACE0BE /* MacTests */ = {
+			isa = PBXGroup;
+			children = (
+				28B7DDC16C1A43320CD832EA /* ChromaScanTests.swift */,
+				E4F61D67F19D186B07A71C62 /* CompanionIntegrationTests.swift */,
+				ACA80DFF7134A8F9353D758D /* CompanionProtocolTests.swift */,
+				7923524F2BBDBCC3B11F02E7 /* ScanSessionEngineTests.swift */,
+			);
+			path = MacTests;
 			sourceTree = "<group>";
 		};
 		9597397EF01EA2931E3E0468 = {
@@ -75,6 +184,8 @@
 			isa = PBXGroup;
 			children = (
 				8F97DF66CF11872FEEF7CF8E /* ChromaScan.app */,
+				6BD54F5AA3038E12A62DBAC5 /* ChromaScanRemote.app */,
+				47B4A2AA2D7C02B03B7C4881 /* ChromaScanRemoteTests.xctest */,
 				90315FD2FE8CF98F7F823F14 /* ChromaScanTests.xctest */,
 			);
 			name = Products;
@@ -83,18 +194,9 @@
 		B3E9127794FD7B272778A0D7 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
-				A1CD3F56B5CCACF3EF38F4BD /* AppDelegate.swift */,
-				B24C554B9077C7CA0C3CCD56 /* AppPreferences.swift */,
-				AD0EC4192389920D63B3CD25 /* BonjourScannerBrowser.swift */,
-				B96256D4AA4F2A336FAD3292 /* ESCLClient.swift */,
-				B2D9308B251CDF8EE922F20C /* ESCLXMLParser.swift */,
-				4B8FD367ABBCA6ACED2ECA1B /* ImagePipeline.swift */,
-				DD2DB3AE02C44693F82E4360 /* InspectorViewController.swift */,
-				CF1E9870B219F0D376AE8893 /* main.swift */,
-				27D1CC93F441E20AC936972E /* MainWindowController.swift */,
-				1B19882871C988E07BD23904 /* Models.swift */,
-				09C788B960683671C8731D1D /* PreviewCanvasView.swift */,
-				0F735D4B0B3857A8F2FBEC71 /* StatusFooterView.swift */,
+				06AB397FA7837600E45B08DC /* Core */,
+				44DF574E2DEAC9F4E38FC55A /* iOSCompanion */,
+				425E3A462956A056C7A87F00 /* MacHost */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -102,7 +204,8 @@
 		B96A211189DB105E29AE5858 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
-				1BEFA72EF9493031747CF3B5 /* ChromaScanTests.swift */,
+				23EF23286CE7986F09E298FC /* iOSTests */,
+				89EDEC13EA32EFB3D2ACE0BE /* MacTests */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -146,6 +249,42 @@
 			productReference = 8F97DF66CF11872FEEF7CF8E /* ChromaScan.app */;
 			productType = "com.apple.product-type.application";
 		};
+		69BFF811EE5E2B8C8CF3E48E /* ChromaScanRemoteTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C6FF6960065585AAE65C6410 /* Build configuration list for PBXNativeTarget "ChromaScanRemoteTests" */;
+			buildPhases = (
+				5E3496CDFAB2681C2F64C4F2 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				28546A5AE4516278955FF39B /* PBXTargetDependency */,
+			);
+			name = ChromaScanRemoteTests;
+			packageProductDependencies = (
+			);
+			productName = ChromaScanRemoteTests;
+			productReference = 47B4A2AA2D7C02B03B7C4881 /* ChromaScanRemoteTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		DF2EC1C9112DA53CCD3880BC /* ChromaScanRemote */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 63F8036F79B63BBB351504B5 /* Build configuration list for PBXNativeTarget "ChromaScanRemote" */;
+			buildPhases = (
+				7C01CCD4134938B17B827BC6 /* Sources */,
+				B8941227BD5478DBD1A59468 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ChromaScanRemote;
+			packageProductDependencies = (
+			);
+			productName = ChromaScanRemote;
+			productReference = 6BD54F5AA3038E12A62DBAC5 /* ChromaScanRemote.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -159,6 +298,14 @@
 						ProvisioningStyle = Automatic;
 					};
 					41AD7D4CF3C600C8DF997F08 = {
+						ProvisioningStyle = Automatic;
+					};
+					69BFF811EE5E2B8C8CF3E48E = {
+						DevelopmentTeam = FXB7YX3ZD4;
+						ProvisioningStyle = Automatic;
+					};
+					DF2EC1C9112DA53CCD3880BC = {
+						DevelopmentTeam = FXB7YX3ZD4;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -178,7 +325,9 @@
 			projectRoot = "";
 			targets = (
 				41AD7D4CF3C600C8DF997F08 /* ChromaScan */,
+				DF2EC1C9112DA53CCD3880BC /* ChromaScanRemote */,
 				32B6D1235E987AEC8B2BA3BB /* ChromaScanTests */,
+				69BFF811EE5E2B8C8CF3E48E /* ChromaScanRemoteTests */,
 			);
 		};
 /* End PBXProject section */
@@ -192,6 +341,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B8941227BD5478DBD1A59468 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA6565A91F0EE99D2B0EBAD2 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -199,7 +356,36 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				FD07566BC9DB5F84CD3DF471 /* ChromaScanTests.swift in Sources */,
+				11FD81D50B61DC27E7D4213F /* ChromaScanTests.swift in Sources */,
+				60DE54F75DFB60592467EBA2 /* CompanionIntegrationTests.swift in Sources */,
+				011F56D29AC65B386A49B6CC /* CompanionProtocolTests.swift in Sources */,
+				30F36BD3E7DB48827ABF656E /* ScanSessionEngineTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		5E3496CDFAB2681C2F64C4F2 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C4B6CF12C214E7C49E78EB3D /* ChromaScanRemoteTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7C01CCD4134938B17B827BC6 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8B911ECF48746BC1258E8FAE /* ChromaScanRemoteApp.swift in Sources */,
+				B4EE293F9286CE9D44B5C202 /* CompanionClient.swift in Sources */,
+				B546D55F3440DDD4FD633D0A /* CompanionProtocol.swift in Sources */,
+				AEC065521EBB177332590A42 /* HostBrowser.swift in Sources */,
+				E88BD7567A02468FB5C28DB6 /* ImagePipeline.swift in Sources */,
+				EC0893452D92CFE990F24B8B /* Models.swift in Sources */,
+				41309C77EE80B6B07D890901 /* PairingView.swift in Sources */,
+				29A07F96D77C65D903F68939 /* RemoteCanvasView.swift in Sources */,
+				4F2FE15701683A8D22354D9E /* RemoteControlsSheet.swift in Sources */,
+				6CEAD245E8AEBF410FA257C4 /* RemoteSessionStore.swift in Sources */,
+				DC8D96F6F15D22163A06F084 /* RemoteWorkspaceView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -207,18 +393,22 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				40D5D6A19E2FF2BC80081390 /* AppDelegate.swift in Sources */,
-				7A14094FC49D5E75461466B7 /* AppPreferences.swift in Sources */,
-				7265999D4F6932C0E742D077 /* BonjourScannerBrowser.swift in Sources */,
-				3777A9D5C4300F90ADE25014 /* ESCLClient.swift in Sources */,
-				5A0214729615C8F8EEC5F536 /* ESCLXMLParser.swift in Sources */,
-				9A9BF38E374E7F18BA9CE4A7 /* ImagePipeline.swift in Sources */,
-				C70ED9301CA91D0D52AB6570 /* InspectorViewController.swift in Sources */,
-				3C5AF3E18D81A483CC18EA90 /* MainWindowController.swift in Sources */,
-				6561BC850FEBB9870BE3254A /* Models.swift in Sources */,
-				357CA50E5BC04002DC180E33 /* PreviewCanvasView.swift in Sources */,
-				58F027C60FA68DA065C93182 /* StatusFooterView.swift in Sources */,
-				A0B054F8D64C6F5A055DEA25 /* main.swift in Sources */,
+				B24CDE02159825DD12076450 /* AppDelegate.swift in Sources */,
+				0154233DA50988DB0968F645 /* AppPreferences.swift in Sources */,
+				4DE06D4A4DC15298827ADB24 /* BonjourScannerBrowser.swift in Sources */,
+				AA2F6257A38EC92B2108D141 /* CompanionPopoverViewController.swift in Sources */,
+				AAC3792122EC81DBD3F873DA /* CompanionProtocol.swift in Sources */,
+				0648D61225A83EF93855A2AB /* CompanionServer.swift in Sources */,
+				4B1CCF09676DA81E2E2735C5 /* ESCLClient.swift in Sources */,
+				6531359E2300EA7F344530F6 /* ESCLXMLParser.swift in Sources */,
+				41ACFD1D3674343DE4E16855 /* ImagePipeline.swift in Sources */,
+				9788333B17855C7A80EF872E /* InspectorViewController.swift in Sources */,
+				415E94AE39803C647D8E0775 /* MainWindowController.swift in Sources */,
+				2AFECF505E34937F5183E306 /* Models.swift in Sources */,
+				F2670C9B7D2BF2D1EC25B272 /* PreviewCanvasView.swift in Sources */,
+				D8BBA79C42F2BAD9D7BF2575 /* ScanSessionEngine.swift in Sources */,
+				4628ADC11842974C3E8B7E7C /* StatusFooterView.swift in Sources */,
+				BC5F30AC44476441713F0933 /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -229,6 +419,11 @@
 			isa = PBXTargetDependency;
 			target = 41AD7D4CF3C600C8DF997F08 /* ChromaScan */;
 			targetProxy = E84EFFAE5FC9377B8D96B933 /* PBXContainerItemProxy */;
+		};
+		28546A5AE4516278955FF39B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = DF2EC1C9112DA53CCD3880BC /* ChromaScanRemote */;
+			targetProxy = 9ECB16202D27DB8DBF357793 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -266,12 +461,10 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
-				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				ENABLE_HARDENED_RUNTIME = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
@@ -288,15 +481,36 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		29C16F2EBB8E83FADD08777D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = FXB7YX3ZD4;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Resources/iOSInfo.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.chromascan.remote;
+				PRODUCT_NAME = ChromaScanRemote;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
@@ -333,12 +547,10 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
-				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				ENABLE_HARDENED_RUNTIME = NO;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
@@ -349,14 +561,33 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		53B4A585E346DBCF96194AE4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				DEVELOPMENT_TEAM = FXB7YX3ZD4;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.chromascan.ChromaScanRemoteTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ChromaScanRemote.app/ChromaScanRemote";
 			};
 			name = Release;
 		};
@@ -364,6 +595,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "-";
 				COMBINE_HIDPI_IMAGES = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -371,6 +603,7 @@
 					"@executable_path/../Frameworks",
 					"@loader_path/../Frameworks",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.chromascan.ChromaScanTests;
 				SDKROOT = macosx;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ChromaScan.app/Contents/MacOS/ChromaScan";
@@ -381,9 +614,12 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "-";
 				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.chromascan.app;
 				SDKROOT = macosx;
 			};
@@ -393,6 +629,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "-";
 				COMBINE_HIDPI_IMAGES = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -400,9 +637,31 @@
 					"@executable_path/../Frameworks",
 					"@loader_path/../Frameworks",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.chromascan.ChromaScanTests;
 				SDKROOT = macosx;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ChromaScan.app/Contents/MacOS/ChromaScan";
+			};
+			name = Release;
+		};
+		A362137C0E312EB6A9C98B03 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = FXB7YX3ZD4;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Resources/iOSInfo.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.chromascan.remote;
+				PRODUCT_NAME = ChromaScanRemote;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
@@ -410,13 +669,35 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "-";
 				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.chromascan.app;
 				SDKROOT = macosx;
 			};
 			name = Release;
+		};
+		C0AF647128208382DCC9A2DE /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				DEVELOPMENT_TEAM = FXB7YX3ZD4;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.chromascan.ChromaScanRemoteTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ChromaScanRemote.app/ChromaScanRemote";
+			};
+			name = Debug;
 		};
 /* End XCBuildConfiguration section */
 
@@ -444,6 +725,24 @@
 			buildConfigurations = (
 				5F83713CD4D3C2D0516B918D /* Debug */,
 				8D4D8516ACB13E75DA724A1E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		63F8036F79B63BBB351504B5 /* Build configuration list for PBXNativeTarget "ChromaScanRemote" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				29C16F2EBB8E83FADD08777D /* Debug */,
+				A362137C0E312EB6A9C98B03 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		C6FF6960065585AAE65C6410 /* Build configuration list for PBXNativeTarget "ChromaScanRemoteTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C0AF647128208382DCC9A2DE /* Debug */,
+				53B4A585E346DBCF96194AE4 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

@@ -18,15 +18,18 @@ enum ESCLClientError: Error, LocalizedError {
     }
 }
 
-struct ScanDownloadResult: Sendable {
-    let data: Data
-    let contentType: String
-    let imageInfo: ScanImageInfo?
-    let jobLocation: URL
+protocol ESCLClientProtocol: Sendable {
+    func fetchCapabilities(from scanner: DiscoveredScanner) async throws -> ScannerCapabilities
+    func fetchStatus(from scanner: DiscoveredScanner) async throws -> ScannerStatus
+    func performScan(
+        scanner: DiscoveredScanner,
+        request: ScanJobRequest,
+        onProgress: @escaping @Sendable (_ bytesReceived: Int64, _ expectedBytes: Int64) -> Void
+    ) async throws -> ScanDownloadResult
 }
 
 /// Async eSCL client with streaming progress and local self-signed TLS tolerance.
-final class ESCLClient: Sendable {
+final class ESCLClient: ESCLClientProtocol, Sendable {
     private let session: URLSession
     private let delegate: SessionDelegate
 

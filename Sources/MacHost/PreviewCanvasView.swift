@@ -306,42 +306,11 @@ final class PreviewCanvasView: NSView {
     // MARK: - Coordinate Mapping (Physical Platen <-> Displayed Rotated Space)
 
     private func physicalToDisplay(_ r: NormalizedCropRect) -> CGRect {
-        let p1 = mapPointToDisplay(CGPoint(x: r.x, y: r.y))
-        let p2 = mapPointToDisplay(CGPoint(x: r.x + r.width, y: r.y + r.height))
-        let minX = min(p1.x, p2.x)
-        let minY = min(p1.y, p2.y)
-        return CGRect(x: minX, y: minY, width: abs(p2.x - p1.x), height: abs(p2.y - p1.y))
+        r.physicalToDisplay(rotation: rotation)
     }
 
     private func displayToPhysical(_ r: CGRect) -> NormalizedCropRect {
-        let p1 = mapPointToPhysical(CGPoint(x: r.minX, y: r.minY))
-        let p2 = mapPointToPhysical(CGPoint(x: r.maxX, y: r.maxY))
-        let minX = min(p1.x, p2.x)
-        let minY = min(p1.y, p2.y)
-        return NormalizedCropRect(
-            x: Double(minX),
-            y: Double(minY),
-            width: Double(abs(p2.x - p1.x)),
-            height: Double(abs(p2.y - p1.y))
-        ).clamped()
-    }
-
-    private func mapPointToDisplay(_ p: CGPoint) -> CGPoint {
-        switch rotation {
-        case .deg0: return p
-        case .deg90: return CGPoint(x: 1.0 - p.y, y: p.x)
-        case .deg180: return CGPoint(x: 1.0 - p.x, y: 1.0 - p.y)
-        case .deg270: return CGPoint(x: p.y, y: 1.0 - p.x)
-        }
-    }
-
-    private func mapPointToPhysical(_ p: CGPoint) -> CGPoint {
-        switch rotation {
-        case .deg0: return p
-        case .deg90: return CGPoint(x: p.y, y: 1.0 - p.x)
-        case .deg180: return CGPoint(x: 1.0 - p.x, y: 1.0 - p.y)
-        case .deg270: return CGPoint(x: 1.0 - p.y, y: p.x)
-        }
+        NormalizedCropRect.fromDisplayRect(r, rotation: rotation)
     }
 
     private func cropViewRect(in pageRect: CGRect) -> CGRect {

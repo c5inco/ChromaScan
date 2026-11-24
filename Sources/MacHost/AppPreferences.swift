@@ -1,8 +1,22 @@
 import Foundation
+import Security
+
+struct PairedCompanionDevice: Codable, Equatable, Identifiable, Sendable {
+    let token: String
+    var clientName: String
+    let pairedAt: Date
+    var lastSeenAt: Date
+
+    var id: String { token }
+}
 
 @MainActor
 final class AppPreferences {
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
 
     private enum Key {
         static let resolution = "scan.resolution"
@@ -16,6 +30,11 @@ final class AppPreferences {
         static let saveFolderPath = "output.saveFolderPath"
         static let baseFilename = "output.baseFilename"
         static let autoIncrement = "output.autoIncrement"
+        static let companionServerEnabled = "companion.serverEnabled"
+        static let pairingPIN = "companion.pairingPIN"
+        static let companionHostID = "companion.hostID"
+        static let pairedDevices = "companion.pairedDevices"
+        static let keepRunningInMenuBar = "companion.keepRunningInMenuBar"
     }
 
     var resolution: Int {
@@ -92,6 +111,113 @@ final class AppPreferences {
             return defaults.bool(forKey: Key.autoIncrement)
         }
         set { defaults.set(newValue, forKey: Key.autoIncrement) }
+    }
+
+    // MARK: - Companion Preferences
+
+    var companionServerEnabled: Bool {
+        get {
+            if defaults.object(forKey: Key.companionServerEnabled) == nil { return true }
+            return defaults.bool(forKey: Key.companionServerEnabled)
+        }
+        set { defaults.set(newValue, forKey: Key.companionServerEnabled) }
+    }
+
+    var keepRunningInMenuBar: Bool {
+        get { defaults.bool(forKey: Key.keepRunningInMenuBar) }
+        set { defaults.set(newValue, forKey: Key.keepRunningInMenuBar) }
+    }
+
+    var companionHostID: String {
+        if let existing = defaults.string(forKey: Key.companionHostID), !existing.isEmpty {
+            return existing
+        }
+        let generated = UUID().uuidString
+        defaults.set(generated, forKey: Key.companionHostID)
+        return generated
+    }
+
+    var pairingPIN: String {
+        get {
+            if let existing = defaults.string(forKey: Key.pairingPIN),
+               existing.count == 6,
+               existing.allSatisfy(\.isNumber) {
+                return existing
+            }
+            return regeneratePairingPIN()
+        }
+        set {
+            defaults.set(newValue, forKey: Key.pairingPIN)
+        }
+    }
+
+    @discardableResult
+    func regeneratePairingPIN() -> String {
+        var randomValue: UInt32 = 0
+        let status = SecRandomCopyBytes(kSecRandomDefault, MemoryLayout<UInt32>.size, &randomValue)
+        let pinInt: UInt32
+        if status == errSecSuccess {
+            pinInt = randomValue % 1_000_000
+        } else {
+            pinInt = UInt32.random(in: 0..<1_000_000)
+        }
+        let formatted = String(format: "%06u", pinInt)
+        defaults.set(formatted, forKey: Key.pairingPIN)
+        return formatted
+    }
+
+    var pairedDevices: [PairedCompanionDevice] {
+        get {
+            guard let data = defaults.data(forKey: Key.pairedDevices),
+                  let decoded = try? JSONDecoder().decode([PairedCompanionDevice].self, from: data) else {
+                return []
+            }
+            return decoded
+        }
+        set {
+            if let encoded = try? JSONEncoder().encode(newValue) {
+                defaults.set(encoded, forKey: Key.pairedDevices)
+            }
+        }
+    }
+
+    func mintPairedDevice(clientName: String) -> PairedCompanionDevice {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        if status != errSecSuccess {
+            for i in 0..<bytes.count {
+                bytes[i] = UInt8.random(in: 0...255)
+            }
+        }
+        let token = bytes.map { String(format: "%02x", $0) }.joined()
+        let now = Date()
+        let device = PairedCompanionDevice(
+            token: token,
+            clientName: clientName,
+            pairedAt: now,
+            lastSeenAt: now
+        )
+        var list = pairedDevices
+        list.append(device)
+        pairedDevices = list
+        return device
+    }
+
+    func validateToken(_ token: String, clientName: String?) -> Bool {
+        var list = pairedDevices
+        guard let idx = list.firstIndex(where: { $0.token == token }) else {
+            return false
+        }
+        list[idx].lastSeenAt = Date()
+        if let clientName, !clientName.isEmpty {
+            list[idx].clientName = clientName
+        }
+        pairedDevices = list
+        return true
+    }
+
+    func revokeAllPairedDevices() {
+        pairedDevices = []
     }
 }
 

@@ -2,10 +2,24 @@ import Foundation
 import Network
 import dnssd
 
+@MainActor
+protocol ScannerBrowserProtocol: AnyObject {
+    var onScannersChanged: (([DiscoveredScanner]) -> Void)? { get set }
+    func start()
+    func stop()
+    func addManualScanner(host: String, port: Int, useTLS: Bool, rootPath: String)
+}
+
+extension ScannerBrowserProtocol {
+    func addManualScanner(host: String, port: Int, useTLS: Bool) {
+        addManualScanner(host: host, port: port, useTLS: useTLS, rootPath: "eSCL")
+    }
+}
+
 /// Discovers eSCL (AirScan) scanners over Bonjour (`_uscan._tcp` and `_uscans._tcp`)
 /// and resolves each service's exact hostname, port, and TXT metadata.
 @MainActor
-final class BonjourScannerBrowser {
+final class BonjourScannerBrowser: ScannerBrowserProtocol {
     var onScannersChanged: (([DiscoveredScanner]) -> Void)?
 
     private var httpBrowser: NWBrowser?

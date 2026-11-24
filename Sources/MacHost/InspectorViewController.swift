@@ -1,15 +1,13 @@
 import AppKit
 
-/// Pure AppKit right-hand inspector sidebar with native macOS controls for Capture, Hardware Tone, Color/Output, and Software Adjustments.
+/// Pure AppKit right-hand inspector sidebar with native macOS controls for Capture, Hardware Tone,
+/// Color/Output, and Software Adjustments. Bidirectionally bound to `ScanSessionEngine`.
 @MainActor
 final class InspectorViewController: NSViewController, NSTextFieldDelegate {
 
-    var onScanSettingsChanged: (() -> Void)?
-    var onPreviewDisplayChanged: (() -> Void)?
-    var onPreferencesChanged: (() -> Void)?
-
-    private let prefs: AppPreferences
+    private let engine: ScanSessionEngine
     private var capabilities: ScannerCapabilities?
+    private var isApplyingSnapshot = false
 
     // Capture controls
     private let sourcePopup = NSPopUpButton()
@@ -20,7 +18,6 @@ final class InspectorViewController: NSViewController, NSTextFieldDelegate {
     private let rotateSegment = NSSegmentedControl()
 
     // Hardware tone controls
-    private let hardwareToneBox = NSView()
     private let brightnessSlider = NSSlider()
     private let brightnessValueLabel = NSTextField(labelWithString: "1000")
     private let contrastSlider = NSSlider()
@@ -39,8 +36,6 @@ final class InspectorViewController: NSViewController, NSTextFieldDelegate {
     private let filenameField = NSTextField()
     private let autoIncrementCheck = NSButton(checkboxWithTitle: "Auto-increment filename", target: nil, action: nil)
 
-    private(set) var previewCompressionEnabled: Bool = true
-
     // Software tone controls (collapsible)
     private let toneDisclosureButton = NSButton(title: "Tone Adjustments (Software)", target: nil, action: nil)
     private let toneContentStack = NSStackView()
@@ -52,54 +47,13 @@ final class InspectorViewController: NSViewController, NSTextFieldDelegate {
     private let gammaLabel = NSTextField(labelWithString: "1.00")
     private let toneResetButton = NSButton(title: "Reset", target: nil, action: nil)
 
-    // State accessors
-    private(set) var selectedSource: ScanInputSource = .platen
-    private(set) var selectedResolution: Int
-    private(set) var selectedColorMode: ScanColorMode
-    private(set) var selectedIntent: ScanIntent
-    private(set) var selectedTransferFormat: TransferFormat
-    private(set) var selectedRotation: ScanRotation
-    private(set) var selectedColorProfile: ColorProfileMode
-    private(set) var selectedOutputFormat: OutputFormat
-    private(set) var selectedQuality: Double
-    private(set) var saveFolderURL: URL
-    private(set) var baseFilename: String
-    private(set) var autoIncrement: Bool
-
-    private var hardwareBrightness: Int = 1000
-    private var hardwareContrast: Int = 1000
-    private var defaultBrightness: Int = 1000
-    private var defaultContrast: Int = 1000
-    private(set) var toneAdjustments = ToneAdjustments()
-
-    init(preferences: AppPreferences) {
-        self.prefs = preferences
-        self.selectedResolution = preferences.resolution
-        self.selectedColorMode = preferences.colorMode
-        self.selectedIntent = preferences.intent
-        self.selectedTransferFormat = preferences.transferFormat
-        self.selectedRotation = preferences.rotation
-        self.selectedColorProfile = preferences.colorProfile
-        self.selectedOutputFormat = preferences.outputFormat
-        self.selectedQuality = preferences.quality
-        self.saveFolderURL = preferences.saveFolderURL
-        self.baseFilename = preferences.baseFilename
-        self.autoIncrement = preferences.autoIncrement
+    init(engine: ScanSessionEngine) {
+        self.engine = engine
         super.init(nibName: nil, bundle: nil)
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
-    }
-
-    var effectiveHardwareBrightness: Int? {
-        guard capabilities?.brightnessRange != nil else { return nil }
-        return hardwareBrightness == defaultBrightness ? nil : hardwareBrightness
-    }
-
-    var effectiveHardwareContrast: Int? {
-        guard capabilities?.contrastRange != nil else { return nil }
-        return hardwareContrast == defaultContrast ? nil : hardwareContrast
     }
 
     override func loadView() {
@@ -153,7 +107,7 @@ final class InspectorViewController: NSViewController, NSTextFieldDelegate {
         rootStack.addArrangedSubview(makeSeparator())
         buildSoftwareToneSection(into: rootStack)
 
-        applyInitialValues()
+        applySnapshot(engine.makeSnapshot())
     }
 
     // MARK: - Section Builders
@@ -234,7 +188,7 @@ final class InspectorViewController: NSViewController, NSTextFieldDelegate {
             formatPopup.lastItem?.representedObject = fmt.rawValue
         }
 
-        configureSlider(qualitySlider, min: 0.5, max: 1.0, value: selectedQuality, action: #selector(qualityChanged))
+        configureSlider(qualitySlider, min: 0.5, max: 1.0, value: engine.settings.quality, action: #selector(qualityChanged))
         configureValueLabel(qualityValueLabel)
 
         folderButton.bezelStyle = .rounded
@@ -344,86 +298,93 @@ final class InspectorViewController: NSViewController, NSTextFieldDelegate {
         toneContentStack.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28).isActive = true
     }
 
-    // MARK: - Populate / Update Controls
+    // MARK: - Snapshot Sync
 
-    private func applyInitialValues() {
-        populateSourcePopup(caps: nil)
-        populateResolutionPopup(resolutions: [75, 100, 200, 300, 600, 1200])
-        populateColorModePopup(modes: ["RGB24", "Grayscale8"])
-        populateIntentPopup()
-        populateTransferPopup(supportsRaw: true, supportsJPEG: true)
+    func applySnapshot(_ snapshot: SessionSnapshot) {
+        isApplyingSnapshot = true
+        defer { isApplyingSnapshot = false }
 
-        if let rotIdx = ScanRotation.allCases.firstIndex(of: selectedRotation) {
-            rotateSegment.selectedSegment = rotIdx
-        }
-        selectPopup(profilePopup, rawValue: selectedColorProfile.rawValue)
-        selectPopup(formatPopup, rawValue: selectedOutputFormat.rawValue)
-        updateQualityVisibility()
-        updateFolderButtonTitle()
-        filenameField.stringValue = baseFilename
-        autoIncrementCheck.state = autoIncrement ? .on : .off
-        updateToneLabels()
-    }
-
-    func applyCapabilities(_ caps: ScannerCapabilities?) {
+        let caps = snapshot.capabilities
+        let settings = snapshot.settings
         self.capabilities = caps
-        populateSourcePopup(caps: caps)
 
-        let inputCaps = caps?.caps(for: selectedSource) ?? caps?.platen
-        populateResolutionPopup(resolutions: inputCaps?.discreteResolutions ?? [75, 100, 200, 300, 600, 1200])
-        populateColorModePopup(modes: inputCaps?.colorModes ?? ["RGB24", "Grayscale8"])
+        populateSourcePopup(caps: caps, selected: settings.inputSource)
+        let inputCaps = caps?.caps(for: settings.inputSource) ?? caps?.platen
+        populateResolutionPopup(resolutions: inputCaps?.discreteResolutions ?? [75, 100, 200, 300, 600, 1200], selected: settings.resolution)
+        populateColorModePopup(modes: inputCaps?.colorModes ?? ["RGB24", "Grayscale8"], selected: settings.colorMode)
+        populateIntentPopup(selected: settings.intent)
         populateTransferPopup(
             supportsRaw: inputCaps?.supportsRawOctetStream ?? true,
-            supportsJPEG: inputCaps?.supportsJPEG ?? true
+            supportsJPEG: inputCaps?.supportsJPEG ?? true,
+            selected: settings.transferFormat
         )
 
+        if let rotIdx = ScanRotation.allCases.firstIndex(of: settings.rotation) {
+            rotateSegment.selectedSegment = rotIdx
+        }
+
         if let br = caps?.brightnessRange {
-            brightnessSlider.isEnabled = true
             brightnessSlider.minValue = Double(br.min)
             brightnessSlider.maxValue = Double(br.max)
-            defaultBrightness = br.normal
-            hardwareBrightness = br.normal
-            brightnessSlider.integerValue = br.normal
-            brightnessValueLabel.stringValue = "\(br.normal)"
-        } else {
-            brightnessSlider.isEnabled = false
+            brightnessSlider.integerValue = settings.hardwareBrightness
+            brightnessValueLabel.stringValue = "\(settings.hardwareBrightness)"
         }
-
         if let cr = caps?.contrastRange {
-            contrastSlider.isEnabled = true
             contrastSlider.minValue = Double(cr.min)
             contrastSlider.maxValue = Double(cr.max)
-            defaultContrast = cr.normal
-            hardwareContrast = cr.normal
-            contrastSlider.integerValue = cr.normal
-            contrastValueLabel.stringValue = "\(cr.normal)"
-        } else {
-            contrastSlider.isEnabled = false
+            contrastSlider.integerValue = settings.hardwareContrast
+            contrastValueLabel.stringValue = "\(settings.hardwareContrast)"
         }
-        hardwareResetButton.isEnabled = (caps?.brightnessRange != nil || caps?.contrastRange != nil)
-    }
 
-    func setFilename(_ name: String) {
-        baseFilename = name
-        filenameField.stringValue = name
-        prefs.baseFilename = name
-    }
+        selectPopup(profilePopup, rawValue: settings.colorProfile.rawValue)
+        profilePopup.isEnabled = (settings.colorMode == .rgb24)
+        selectPopup(formatPopup, rawValue: settings.outputFormat.rawValue)
 
-    func setBusy(_ busy: Bool) {
-        let enabled = !busy
+        qualitySlider.doubleValue = settings.quality
+        let lossy = settings.outputFormat.supportsQuality
+        qualityRow.isHidden = !lossy
+        previewCompressionCheck.isHidden = !lossy
+        previewCompressionCheck.state = settings.previewCompressionEnabled ? .on : .off
+        qualityValueLabel.stringValue = "\(Int((settings.quality * 100).rounded()))%"
+
+        setOutputPreviewSummary(snapshot.outputPreviewSummary)
+
+        folderButton.title = engine.saveFolderURL.lastPathComponent
+        folderButton.toolTip = engine.saveFolderURL.path
+
+        if filenameField.stringValue != settings.baseFilename {
+            filenameField.stringValue = settings.baseFilename
+        }
+        autoIncrementCheck.state = settings.autoIncrement ? .on : .off
+
+        blackPointSlider.doubleValue = settings.toneAdjustments.blackPoint
+        whitePointSlider.doubleValue = settings.toneAdjustments.whitePoint
+        gammaSlider.doubleValue = settings.toneAdjustments.gamma
+        blackPointLabel.stringValue = "\(Int((settings.toneAdjustments.blackPoint * 100).rounded()))%"
+        whitePointLabel.stringValue = "\(Int((settings.toneAdjustments.whitePoint * 100).rounded()))%"
+        gammaLabel.stringValue = String(format: "%.2f", settings.toneAdjustments.gamma)
+
+        let enabled = !snapshot.isBusy
         sourcePopup.isEnabled = enabled
         resolutionPopup.isEnabled = enabled
         colorModePopup.isEnabled = enabled
         intentPopup.isEnabled = enabled
         transferPopup.isEnabled = enabled
-        brightnessSlider.isEnabled = enabled && capabilities?.brightnessRange != nil
-        contrastSlider.isEnabled = enabled && capabilities?.contrastRange != nil
-        hardwareResetButton.isEnabled = enabled && (capabilities?.brightnessRange != nil || capabilities?.contrastRange != nil)
+        brightnessSlider.isEnabled = enabled && caps?.brightnessRange != nil
+        contrastSlider.isEnabled = enabled && caps?.contrastRange != nil
+        hardwareResetButton.isEnabled = enabled && (caps?.brightnessRange != nil || caps?.contrastRange != nil)
         folderButton.isEnabled = enabled
         filenameField.isEnabled = enabled
     }
 
-    private func populateSourcePopup(caps: ScannerCapabilities?) {
+    func setOutputPreviewSummary(_ text: String) {
+        outputPreviewSummaryLabel.stringValue = text
+        outputPreviewSummaryLabel.isHidden = text.isEmpty
+    }
+
+    // MARK: - Popup Population
+
+    private func populateSourcePopup(caps: ScannerCapabilities?, selected: ScanInputSource) {
         sourcePopup.removeAllItems()
         var available: [ScanInputSource] = []
         if caps == nil || caps?.platen != nil { available.append(.platen) }
@@ -434,27 +395,23 @@ final class InspectorViewController: NSViewController, NSTextFieldDelegate {
             sourcePopup.addItem(withTitle: src.displayName)
             sourcePopup.lastItem?.representedObject = src.rawValue
         }
-        if !available.contains(selectedSource) {
-            selectedSource = available[0]
-        }
-        selectPopup(sourcePopup, rawValue: selectedSource.rawValue)
+        selectPopup(sourcePopup, rawValue: available.contains(selected) ? selected.rawValue : available[0].rawValue)
     }
 
-    private func populateResolutionPopup(resolutions: [Int]) {
+    private func populateResolutionPopup(resolutions: [Int], selected: Int) {
         resolutionPopup.removeAllItems()
         for r in resolutions {
             resolutionPopup.addItem(withTitle: "\(r) DPI")
             resolutionPopup.lastItem?.representedObject = r
         }
-        if !resolutions.contains(selectedResolution) {
-            selectedResolution = resolutions.last ?? 300
-        }
-        if let idx = resolutions.firstIndex(of: selectedResolution) {
+        if let idx = resolutions.firstIndex(of: selected) {
             resolutionPopup.selectItem(at: idx)
+        } else if !resolutions.isEmpty {
+            resolutionPopup.selectItem(at: resolutions.count - 1)
         }
     }
 
-    private func populateColorModePopup(modes: [String]) {
+    private func populateColorModePopup(modes: [String], selected: ScanColorMode) {
         colorModePopup.removeAllItems()
         let supported = ScanColorMode.allCases.filter { modes.isEmpty || modes.contains($0.rawValue) }
         let list = supported.isEmpty ? [ScanColorMode.rgb24] : supported
@@ -462,22 +419,19 @@ final class InspectorViewController: NSViewController, NSTextFieldDelegate {
             colorModePopup.addItem(withTitle: m.displayName)
             colorModePopup.lastItem?.representedObject = m.rawValue
         }
-        if !list.contains(selectedColorMode) {
-            selectedColorMode = list[0]
-        }
-        selectPopup(colorModePopup, rawValue: selectedColorMode.rawValue)
+        selectPopup(colorModePopup, rawValue: list.contains(selected) ? selected.rawValue : list[0].rawValue)
     }
 
-    private func populateIntentPopup() {
+    private func populateIntentPopup(selected: ScanIntent) {
         intentPopup.removeAllItems()
         for intent in ScanIntent.allCases {
             intentPopup.addItem(withTitle: intent.displayName)
             intentPopup.lastItem?.representedObject = intent.rawValue
         }
-        selectPopup(intentPopup, rawValue: selectedIntent.rawValue)
+        selectPopup(intentPopup, rawValue: selected.rawValue)
     }
 
-    private func populateTransferPopup(supportsRaw: Bool, supportsJPEG: Bool) {
+    private func populateTransferPopup(supportsRaw: Bool, supportsJPEG: Bool, selected: TransferFormat) {
         transferPopup.removeAllItems()
         var formats: [TransferFormat] = []
         if supportsRaw { formats.append(.rawOctetStream) }
@@ -488,133 +442,87 @@ final class InspectorViewController: NSViewController, NSTextFieldDelegate {
             transferPopup.addItem(withTitle: f.displayName)
             transferPopup.lastItem?.representedObject = f.rawValue
         }
-        if !formats.contains(selectedTransferFormat) {
-            selectedTransferFormat = formats[0]
-        }
-        selectPopup(transferPopup, rawValue: selectedTransferFormat.rawValue)
-    }
-
-    private func updateQualityVisibility() {
-        let lossy = selectedOutputFormat.supportsQuality
-        qualityRow.isHidden = !lossy
-        previewCompressionCheck.isHidden = !lossy
-        qualityValueLabel.stringValue = "\(Int((selectedQuality * 100).rounded()))%"
-    }
-
-    func setOutputPreviewSummary(_ text: String) {
-        outputPreviewSummaryLabel.stringValue = text
-        outputPreviewSummaryLabel.isHidden = text.isEmpty
-    }
-
-    private func updateFolderButtonTitle() {
-        folderButton.title = saveFolderURL.lastPathComponent
-        folderButton.toolTip = saveFolderURL.path
-    }
-
-    private func updateToneLabels() {
-        blackPointLabel.stringValue = "\(Int((toneAdjustments.blackPoint * 100).rounded()))%"
-        whitePointLabel.stringValue = "\(Int((toneAdjustments.whitePoint * 100).rounded()))%"
-        gammaLabel.stringValue = String(format: "%.2f", toneAdjustments.gamma)
+        selectPopup(transferPopup, rawValue: formats.contains(selected) ? selected.rawValue : formats[0].rawValue)
     }
 
     // MARK: - Actions
 
     @objc private func sourceChanged() {
-        guard let raw = sourcePopup.selectedItem?.representedObject as? String,
+        guard !isApplyingSnapshot,
+              let raw = sourcePopup.selectedItem?.representedObject as? String,
               let src = ScanInputSource(rawValue: raw) else { return }
-        selectedSource = src
-        if let caps = capabilities {
-            let inputCaps = caps.caps(for: src) ?? caps.platen
-            populateResolutionPopup(resolutions: inputCaps?.discreteResolutions ?? [75, 100, 200, 300, 600])
-        }
-        onScanSettingsChanged?()
+        engine.updateSettings(ScanSettingsPatch(inputSource: src))
     }
 
     @objc private func resolutionChanged() {
-        guard let r = resolutionPopup.selectedItem?.representedObject as? Int else { return }
-        selectedResolution = r
-        prefs.resolution = r
-        onScanSettingsChanged?()
+        guard !isApplyingSnapshot,
+              let r = resolutionPopup.selectedItem?.representedObject as? Int else { return }
+        engine.updateSettings(ScanSettingsPatch(resolution: r))
     }
 
     @objc private func colorModeChanged() {
-        guard let raw = colorModePopup.selectedItem?.representedObject as? String,
+        guard !isApplyingSnapshot,
+              let raw = colorModePopup.selectedItem?.representedObject as? String,
               let mode = ScanColorMode(rawValue: raw) else { return }
-        selectedColorMode = mode
-        prefs.colorMode = mode
-        profilePopup.isEnabled = (mode == .rgb24)
-        onScanSettingsChanged?()
+        engine.updateSettings(ScanSettingsPatch(colorMode: mode))
     }
 
     @objc private func intentChanged() {
-        guard let raw = intentPopup.selectedItem?.representedObject as? String,
+        guard !isApplyingSnapshot,
+              let raw = intentPopup.selectedItem?.representedObject as? String,
               let intent = ScanIntent(rawValue: raw) else { return }
-        selectedIntent = intent
-        prefs.intent = intent
-        onScanSettingsChanged?()
+        engine.updateSettings(ScanSettingsPatch(intent: intent))
     }
 
     @objc private func transferChanged() {
-        guard let raw = transferPopup.selectedItem?.representedObject as? String,
+        guard !isApplyingSnapshot,
+              let raw = transferPopup.selectedItem?.representedObject as? String,
               let tf = TransferFormat(rawValue: raw) else { return }
-        selectedTransferFormat = tf
-        prefs.transferFormat = tf
-        onScanSettingsChanged?()
+        engine.updateSettings(ScanSettingsPatch(transferFormat: tf))
     }
 
     @objc private func rotationChanged() {
+        guard !isApplyingSnapshot else { return }
         let idx = rotateSegment.selectedSegment
         guard idx >= 0 && idx < ScanRotation.allCases.count else { return }
-        selectedRotation = ScanRotation.allCases[idx]
-        prefs.rotation = selectedRotation
-        onPreviewDisplayChanged?()
-        onScanSettingsChanged?()
+        engine.updateSettings(ScanSettingsPatch(rotation: ScanRotation.allCases[idx]))
     }
 
     @objc private func hardwareToneChanged() {
-        hardwareBrightness = brightnessSlider.integerValue
-        hardwareContrast = contrastSlider.integerValue
-        brightnessValueLabel.stringValue = "\(hardwareBrightness)"
-        contrastValueLabel.stringValue = "\(hardwareContrast)"
+        guard !isApplyingSnapshot else { return }
+        engine.updateSettings(ScanSettingsPatch(
+            hardwareBrightness: brightnessSlider.integerValue,
+            hardwareContrast: contrastSlider.integerValue
+        ))
     }
 
     @objc private func resetHardwareTone() {
-        hardwareBrightness = defaultBrightness
-        hardwareContrast = defaultContrast
-        brightnessSlider.integerValue = defaultBrightness
-        contrastSlider.integerValue = defaultContrast
-        brightnessValueLabel.stringValue = "\(defaultBrightness)"
-        contrastValueLabel.stringValue = "\(defaultContrast)"
+        guard !isApplyingSnapshot else { return }
+        engine.updateSettings(ScanSettingsPatch(resetHardwareTone: true))
     }
 
     @objc private func profileChanged() {
-        guard let raw = profilePopup.selectedItem?.representedObject as? String,
+        guard !isApplyingSnapshot,
+              let raw = profilePopup.selectedItem?.representedObject as? String,
               let mode = ColorProfileMode(rawValue: raw) else { return }
-        selectedColorProfile = mode
-        prefs.colorProfile = mode
-        onPreviewDisplayChanged?()
+        engine.updateSettings(ScanSettingsPatch(colorProfile: mode))
     }
 
     @objc private func formatChanged() {
-        guard let raw = formatPopup.selectedItem?.representedObject as? String,
+        guard !isApplyingSnapshot,
+              let raw = formatPopup.selectedItem?.representedObject as? String,
               let fmt = OutputFormat(rawValue: raw) else { return }
-        selectedOutputFormat = fmt
-        prefs.outputFormat = fmt
-        updateQualityVisibility()
-        onPreferencesChanged?()
-        onPreviewDisplayChanged?()
+        engine.updateSettings(ScanSettingsPatch(outputFormat: fmt))
     }
 
     @objc private func qualityChanged() {
-        selectedQuality = qualitySlider.doubleValue
-        prefs.quality = selectedQuality
-        qualityValueLabel.stringValue = "\(Int((selectedQuality * 100).rounded()))%"
-        onPreviewDisplayChanged?()
+        guard !isApplyingSnapshot else { return }
+        engine.updateSettings(ScanSettingsPatch(quality: qualitySlider.doubleValue))
     }
 
     @objc private func previewCompressionChanged() {
-        previewCompressionEnabled = (previewCompressionCheck.state == .on)
-        onPreviewDisplayChanged?()
+        guard !isApplyingSnapshot else { return }
+        engine.updateSettings(ScanSettingsPatch(previewCompressionEnabled: previewCompressionCheck.state == .on))
     }
 
     @objc private func chooseFolderClicked() {
@@ -623,26 +531,24 @@ final class InspectorViewController: NSViewController, NSTextFieldDelegate {
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
-        panel.directoryURL = saveFolderURL
+        panel.directoryURL = engine.saveFolderURL
         panel.prompt = "Choose"
         if let window = view.window {
             panel.beginSheetModal(for: window) { [weak self] resp in
                 guard resp == .OK, let url = panel.url, let self else { return }
-                self.saveFolderURL = url
-                self.prefs.saveFolderURL = url
-                self.updateFolderButtonTitle()
+                self.engine.setSaveFolderURL(url)
             }
         }
     }
 
     @objc private func autoIncrementChanged() {
-        autoIncrement = (autoIncrementCheck.state == .on)
-        prefs.autoIncrement = autoIncrement
+        guard !isApplyingSnapshot else { return }
+        engine.updateSettings(ScanSettingsPatch(autoIncrement: autoIncrementCheck.state == .on))
     }
 
     func controlTextDidChange(_ obj: Notification) {
-        baseFilename = filenameField.stringValue
-        prefs.baseFilename = baseFilename
+        guard !isApplyingSnapshot else { return }
+        engine.updateSettings(ScanSettingsPatch(baseFilename: filenameField.stringValue))
     }
 
     @objc private func toggleSoftwareTone() {
@@ -656,20 +562,18 @@ final class InspectorViewController: NSViewController, NSTextFieldDelegate {
     }
 
     @objc private func softwareToneChanged() {
-        toneAdjustments.blackPoint = blackPointSlider.doubleValue
-        toneAdjustments.whitePoint = whitePointSlider.doubleValue
-        toneAdjustments.gamma = gammaSlider.doubleValue
-        updateToneLabels()
-        onPreviewDisplayChanged?()
+        guard !isApplyingSnapshot else { return }
+        let tone = ToneAdjustments(
+            blackPoint: blackPointSlider.doubleValue,
+            whitePoint: whitePointSlider.doubleValue,
+            gamma: gammaSlider.doubleValue
+        )
+        engine.updateSettings(ScanSettingsPatch(toneAdjustments: tone))
     }
 
     @objc private func resetSoftwareTone() {
-        toneAdjustments = ToneAdjustments()
-        blackPointSlider.doubleValue = 0.0
-        whitePointSlider.doubleValue = 1.0
-        gammaSlider.doubleValue = 1.0
-        updateToneLabels()
-        onPreviewDisplayChanged?()
+        guard !isApplyingSnapshot else { return }
+        engine.updateSettings(ScanSettingsPatch(resetSoftwareTone: true))
     }
 
     // MARK: - UI Factory Helpers

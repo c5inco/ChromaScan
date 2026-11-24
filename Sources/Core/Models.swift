@@ -3,7 +3,7 @@ import CoreGraphics
 
 // MARK: - Discovered Scanner
 
-struct DiscoveredScanner: Identifiable, Hashable, Sendable {
+struct DiscoveredScanner: Identifiable, Hashable, Codable, Sendable {
     let id: String
     let name: String
     let host: String
@@ -31,7 +31,7 @@ struct DiscoveredScanner: Identifiable, Hashable, Sendable {
 
 // MARK: - eSCL Capabilities
 
-struct ScannerCapabilities: Sendable, Equatable {
+struct ScannerCapabilities: Codable, Sendable, Equatable {
     let version: String
     let makeAndModel: String
     let serialNumber: String?
@@ -40,14 +40,14 @@ struct ScannerCapabilities: Sendable, Equatable {
     let brightnessRange: ToneRange?
     let contrastRange: ToneRange?
 
-    struct ToneRange: Sendable, Equatable {
+    struct ToneRange: Codable, Sendable, Equatable {
         let min: Int
         let max: Int
         let normal: Int
         let step: Int
     }
 
-    struct InputSourceCaps: Sendable, Equatable {
+    struct InputSourceCaps: Codable, Sendable, Equatable {
         let minWidth: Int       // in 1/300" units
         let maxWidth: Int       // in 1/300" units
         let minHeight: Int      // in 1/300" units
@@ -73,21 +73,46 @@ struct ScannerCapabilities: Sendable, Equatable {
     }
 }
 
-struct ScannerStatus: Sendable, Equatable {
+struct ScannerStatus: Codable, Sendable, Equatable {
     let state: String          // "Idle", "Processing", "Stopped"
     let adfState: String?      // "ScannerAdfEmpty", "ScannerAdfLoaded", etc.
 }
 
-struct ScanImageInfo: Sendable, Equatable {
+struct ScanImageInfo: Codable, Sendable, Equatable {
     let jobUUID: String?
     let actualWidth: Int
     let actualHeight: Int
     let actualBytesPerLine: Int
 }
 
+struct ScanDownloadResult: Sendable {
+    let data: Data
+    let contentType: String
+    let imageInfo: ScanImageInfo?
+    let jobLocation: URL
+}
+
+// MARK: - Canvas View Mode
+
+enum CanvasViewMode: String, CaseIterable, Codable, Sendable {
+    case preview = "preview"
+    case scan = "scan"
+
+    var segmentIndex: Int {
+        switch self {
+        case .preview: return 0
+        case .scan: return 1
+        }
+    }
+
+    init(segmentIndex: Int) {
+        self = (segmentIndex == 1) ? .scan : .preview
+    }
+}
+
 // MARK: - Scan Options
 
-enum ScanInputSource: String, CaseIterable, Sendable {
+enum ScanInputSource: String, CaseIterable, Codable, Sendable {
     case platen = "Platen"
     case feeder = "Feeder"
 
@@ -99,7 +124,7 @@ enum ScanInputSource: String, CaseIterable, Sendable {
     }
 }
 
-enum ScanColorMode: String, CaseIterable, Sendable {
+enum ScanColorMode: String, CaseIterable, Codable, Sendable {
     case rgb24 = "RGB24"
     case grayscale8 = "Grayscale8"
 
@@ -118,7 +143,7 @@ enum ScanColorMode: String, CaseIterable, Sendable {
     }
 }
 
-enum ScanIntent: String, CaseIterable, Sendable {
+enum ScanIntent: String, CaseIterable, Codable, Sendable {
     case photo = "Photo"
     case document = "Document"
     case textAndGraphic = "TextAndGraphic"
@@ -140,7 +165,7 @@ enum ScanIntent: String, CaseIterable, Sendable {
     }
 }
 
-enum TransferFormat: String, CaseIterable, Sendable {
+enum TransferFormat: String, CaseIterable, Codable, Sendable {
     case rawOctetStream = "application/octet-stream"
     case jpeg = "image/jpeg"
 
@@ -152,7 +177,7 @@ enum TransferFormat: String, CaseIterable, Sendable {
     }
 }
 
-enum ScanRotation: Int, CaseIterable, Sendable {
+enum ScanRotation: Int, CaseIterable, Codable, Sendable {
     case deg0 = 0
     case deg90 = 90
     case deg180 = 180
@@ -161,7 +186,7 @@ enum ScanRotation: Int, CaseIterable, Sendable {
     var displayName: String { "\(rawValue)°" }
 }
 
-enum ColorProfileMode: String, CaseIterable, Sendable {
+enum ColorProfileMode: String, CaseIterable, Codable, Sendable {
     case displayP3Convert = "p3_convert"
     case displayP3Assign = "p3_assign"
     case sRGB = "srgb"
@@ -183,7 +208,7 @@ enum ColorProfileMode: String, CaseIterable, Sendable {
     }
 }
 
-enum OutputFormat: String, CaseIterable, Sendable {
+enum OutputFormat: String, CaseIterable, Codable, Sendable {
     case tiffLZW = "tiff_lzw"
     case tiffUncompressed = "tiff_uncompressed"
     case png = "png"
@@ -223,7 +248,7 @@ enum OutputFormat: String, CaseIterable, Sendable {
     }
 }
 
-struct ToneAdjustments: Equatable, Sendable {
+struct ToneAdjustments: Codable, Equatable, Sendable {
     var blackPoint: Double = 0.0   // 0.0 ... 0.25
     var whitePoint: Double = 1.0   // 0.75 ... 1.0
     var gamma: Double = 1.0        // 0.50 ... 2.00
@@ -250,7 +275,7 @@ struct ToneAdjustments: Equatable, Sendable {
 }
 
 /// Normalized crop rectangle in physical flatbed coordinates (origin top-left, 0...1).
-struct NormalizedCropRect: Equatable, Sendable {
+struct NormalizedCropRect: Codable, Equatable, Sendable {
     var x: Double = 0.0
     var y: Double = 0.0
     var width: Double = 1.0
@@ -260,6 +285,24 @@ struct NormalizedCropRect: Equatable, Sendable {
 
     var isFull: Bool {
         abs(x) < 0.001 && abs(y) < 0.001 && abs(width - 1.0) < 0.001 && abs(height - 1.0) < 0.001
+    }
+
+    var cgRect: CGRect {
+        CGRect(x: x, y: y, width: width, height: height)
+    }
+
+    init(x: Double = 0.0, y: Double = 0.0, width: Double = 1.0, height: Double = 1.0) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+
+    init(cgRect: CGRect) {
+        self.x = Double(cgRect.origin.x)
+        self.y = Double(cgRect.origin.y)
+        self.width = Double(cgRect.size.width)
+        self.height = Double(cgRect.size.height)
     }
 
     func clamped(minSize: Double = 0.02) -> NormalizedCropRect {
@@ -278,6 +321,135 @@ struct NormalizedCropRect: Equatable, Sendable {
         let w = max(8, min(maxWidth - xOff, Int((c.width * Double(maxWidth)).rounded())))
         let h = max(8, min(maxHeight - yOff, Int((c.height * Double(maxHeight)).rounded())))
         return (xOff, yOff, w, h)
+    }
+
+    /// Maps physical platen coordinates to displayed rotated coordinates (origin top-left, 0...1).
+    func physicalToDisplay(rotation: ScanRotation) -> CGRect {
+        let p1 = Self.mapPointToDisplay(CGPoint(x: x, y: y), rotation: rotation)
+        let p2 = Self.mapPointToDisplay(CGPoint(x: x + width, y: y + height), rotation: rotation)
+        let minX = min(p1.x, p2.x)
+        let minY = min(p1.y, p2.y)
+        return CGRect(x: minX, y: minY, width: abs(p2.x - p1.x), height: abs(p2.y - p1.y))
+    }
+
+    /// Maps displayed rotated coordinates (origin top-left, 0...1) back to physical platen coordinates.
+    static func fromDisplayRect(_ rect: CGRect, rotation: ScanRotation) -> NormalizedCropRect {
+        let p1 = mapPointToPhysical(CGPoint(x: rect.minX, y: rect.minY), rotation: rotation)
+        let p2 = mapPointToPhysical(CGPoint(x: rect.maxX, y: rect.maxY), rotation: rotation)
+        let minX = min(p1.x, p2.x)
+        let minY = min(p1.y, p2.y)
+        return NormalizedCropRect(
+            x: Double(minX),
+            y: Double(minY),
+            width: Double(abs(p2.x - p1.x)),
+            height: Double(abs(p2.y - p1.y))
+        ).clamped()
+    }
+
+    static func mapPointToDisplay(_ p: CGPoint, rotation: ScanRotation) -> CGPoint {
+        switch rotation {
+        case .deg0: return p
+        case .deg90: return CGPoint(x: 1.0 - p.y, y: p.x)
+        case .deg180: return CGPoint(x: 1.0 - p.x, y: 1.0 - p.y)
+        case .deg270: return CGPoint(x: p.y, y: 1.0 - p.x)
+        }
+    }
+
+    static func mapPointToPhysical(_ p: CGPoint, rotation: ScanRotation) -> CGPoint {
+        switch rotation {
+        case .deg0: return p
+        case .deg90: return CGPoint(x: p.y, y: 1.0 - p.x)
+        case .deg180: return CGPoint(x: 1.0 - p.x, y: 1.0 - p.y)
+        case .deg270: return CGPoint(x: 1.0 - p.y, y: p.x)
+        }
+    }
+}
+
+// MARK: - Shared Session Settings & Patch
+
+struct ScanSessionSettings: Codable, Equatable, Sendable {
+    var inputSource: ScanInputSource = .platen
+    var resolution: Int = 1200
+    var colorMode: ScanColorMode = .rgb24
+    var intent: ScanIntent = .photo
+    var transferFormat: TransferFormat = .rawOctetStream
+    var rotation: ScanRotation = .deg0
+    var hardwareBrightness: Int = 1000
+    var hardwareContrast: Int = 1000
+    var colorProfile: ColorProfileMode = .displayP3Convert
+    var outputFormat: OutputFormat = .tiffLZW
+    var quality: Double = 0.92
+    var previewCompressionEnabled: Bool = true
+    var toneAdjustments: ToneAdjustments = ToneAdjustments()
+    var baseFilename: String = "scan-001"
+    var autoIncrement: Bool = true
+}
+
+struct ScanSettingsPatch: Codable, Equatable, Sendable {
+    var inputSource: ScanInputSource?
+    var resolution: Int?
+    var colorMode: ScanColorMode?
+    var intent: ScanIntent?
+    var transferFormat: TransferFormat?
+    var rotation: ScanRotation?
+    var hardwareBrightness: Int?
+    var hardwareContrast: Int?
+    var resetHardwareTone: Bool?
+    var colorProfile: ColorProfileMode?
+    var outputFormat: OutputFormat?
+    var quality: Double?
+    var previewCompressionEnabled: Bool?
+    var toneAdjustments: ToneAdjustments?
+    var resetSoftwareTone: Bool?
+    var baseFilename: String?
+    var autoIncrement: Bool?
+
+    init(
+        inputSource: ScanInputSource? = nil,
+        resolution: Int? = nil,
+        colorMode: ScanColorMode? = nil,
+        intent: ScanIntent? = nil,
+        transferFormat: TransferFormat? = nil,
+        rotation: ScanRotation? = nil,
+        hardwareBrightness: Int? = nil,
+        hardwareContrast: Int? = nil,
+        resetHardwareTone: Bool? = nil,
+        colorProfile: ColorProfileMode? = nil,
+        outputFormat: OutputFormat? = nil,
+        quality: Double? = nil,
+        previewCompressionEnabled: Bool? = nil,
+        toneAdjustments: ToneAdjustments? = nil,
+        resetSoftwareTone: Bool? = nil,
+        baseFilename: String? = nil,
+        autoIncrement: Bool? = nil
+    ) {
+        self.inputSource = inputSource
+        self.resolution = resolution
+        self.colorMode = colorMode
+        self.intent = intent
+        self.transferFormat = transferFormat
+        self.rotation = rotation
+        self.hardwareBrightness = hardwareBrightness
+        self.hardwareContrast = hardwareContrast
+        self.resetHardwareTone = resetHardwareTone
+        self.colorProfile = colorProfile
+        self.outputFormat = outputFormat
+        self.quality = quality
+        self.previewCompressionEnabled = previewCompressionEnabled
+        self.toneAdjustments = toneAdjustments
+        self.resetSoftwareTone = resetSoftwareTone
+        self.baseFilename = baseFilename
+        self.autoIncrement = autoIncrement
+    }
+
+    var affectsDisplayRendering: Bool {
+        rotation != nil
+            || colorProfile != nil
+            || outputFormat != nil
+            || quality != nil
+            || previewCompressionEnabled != nil
+            || toneAdjustments != nil
+            || resetSoftwareTone == true
     }
 }
 
