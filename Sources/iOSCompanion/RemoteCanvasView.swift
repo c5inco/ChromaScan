@@ -138,7 +138,7 @@ final class RemoteCanvasUIView: UIView, UIScrollViewDelegate {
         zoomBadge.sizeToFit()
         let bw = max(56, zoomBadge.bounds.width + 18)
         let bh: CGFloat = 22
-        zoomBadge.frame = CGRect(x: bounds.width - bw - 14, y: 12, width: bw, height: bh)
+        zoomBadge.frame = CGRect(x: bounds.width - bw - 14, y: bounds.height - bh - 12, width: bw, height: bh)
     }
 
     func update(

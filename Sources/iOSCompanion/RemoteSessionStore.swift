@@ -17,6 +17,14 @@ struct RemoteProgressState: Equatable, Sendable {
     }
 }
 
+struct RemoteOperationDisplayInfo: Equatable, Sendable {
+    let title: String
+    let statusDetail: String
+    let trailingBadge: String?
+    let progressFraction: Double?
+    let metadataSummary: String
+}
+
 struct RemoteErrorAlert: Identifiable, Equatable, Sendable {
     let id = UUID()
     let title: String
@@ -332,7 +340,7 @@ final class RemoteSessionStore {
         client.send(.requestPhotosCopy(requestID: reqID, format: format, quality: quality))
     }
 
-    // MARK: - Computed Dimensions Summary
+    // MARK: - Computed Dimensions & Active Operation Summary
 
     var dimensionsReadout: String {
         guard let snap = snapshot else { return "" }
@@ -348,6 +356,11 @@ final class RemoteSessionStore {
             return "\(pw)×\(ph) px · \(dpi) DPI · \(profile)"
         }
 
+        return plannedCaptureReadout
+    }
+
+    var plannedCaptureReadout: String {
+        guard let snap = snapshot else { return "" }
         let source = snap.settings.inputSource
         let inputCaps = snap.capabilities?.caps(for: source) ?? snap.capabilities?.platen
         let maxW = inputCaps?.maxWidth ?? 2550
@@ -372,6 +385,125 @@ final class RemoteSessionStore {
         let pw = nf.string(from: NSNumber(value: pxW)) ?? "\(pxW)"
         let ph = nf.string(from: NSNumber(value: pxH)) ?? "\(pxH)"
         return String(format: "%.2f\"×%.2f\" · %@×%@ (%@ raw)", wIn, hIn, pw, ph, sizeStr)
+    }
+
+    var activeOperationInfo: RemoteOperationDisplayInfo {
+        guard let snap = snapshot else {
+            return RemoteOperationDisplayInfo(
+                title: "Working…",
+                statusDetail: "",
+                trailingBadge: nil,
+                progressFraction: nil,
+                metadataSummary: ""
+            )
+        }
+
+        let op = progress?.operation ?? snap.activeOperation
+        let rawStatus = (progress?.statusText ?? snap.statusText)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let isProcessingPhase = rawStatus.hasPrefix("Processing") || rawStatus.hasPrefix("Rendering")
+
+        let title: String
+        switch op {
+        case .preview:
+            title = rawStatus.hasPrefix("Rendering") ? "Rendering Preview" : "Previewing Flatbed"
+        case .scan:
+            title = rawStatus.hasPrefix("Processing")
+                ? "Processing & Saving"
+                : "Scanning · \(snap.settings.resolution) DPI"
+        case .export:
+            title = "Exporting Scan"
+        case nil:
+            title = "Working…"
+        }
+
+        let fraction: Double?
+        if let progress,
+           op != .export,
+           !isProcessingPhase,
+           progress.expectedBytes > 0,
+           progress.bytesReceived > 0 {
+            fraction = progress.fraction
+        } else {
+            fraction = nil
+        }
+
+        let statusDetail: String
+        let trailingBadge: String?
+
+        if let progress {
+            if isProcessingPhase || op == .export {
+                statusDetail = rawStatus.isEmpty ? title : rawStatus
+                trailingBadge = progress.elapsedSeconds >= 1.0
+                    ? Self.formatElapsedSeconds(progress.elapsedSeconds)
+                    : nil
+            } else if progress.bytesReceived > 0 && progress.expectedBytes > 0 {
+                let recvStr = Self.formatMegabytes(progress.bytesReceived)
+                let expStr = Self.formatMegabytes(progress.expectedBytes)
+                let elapsedStr = Self.formatElapsedSeconds(progress.elapsedSeconds)
+                statusDetail = "\(recvStr) / \(expStr) · \(elapsedStr)"
+                let pct = Int(((fraction ?? 0) * 100.0).rounded())
+                trailingBadge = "\(pct)%"
+            } else if progress.bytesReceived > 0 {
+                let recvStr = Self.formatMegabytes(progress.bytesReceived)
+                let elapsedStr = Self.formatElapsedSeconds(progress.elapsedSeconds)
+                statusDetail = "\(recvStr) received · \(elapsedStr)"
+                trailingBadge = nil
+            } else if progress.expectedBytes > 0 {
+                let expStr = Self.formatMegabytes(progress.expectedBytes)
+                statusDetail = "Starting scanner… · \(expStr) expected"
+                trailingBadge = nil
+            } else {
+                statusDetail = rawStatus.isEmpty ? "Starting…" : rawStatus
+                trailingBadge = nil
+            }
+        } else {
+            statusDetail = rawStatus.isEmpty ? "Starting…" : rawStatus
+            trailingBadge = nil
+        }
+
+        let metadataSummary: String
+        switch op {
+        case .scan:
+            let profile = snap.settings.colorMode == .grayscale8
+                ? "Grayscale"
+                : snap.settings.colorProfile.shortName
+            let details = [plannedCaptureReadout, profile, snap.settings.outputFormat.displayName]
+                .filter { !$0.isEmpty }
+            metadataSummary = details.joined(separator: " · ")
+        case .preview:
+            let scanner = snap.selectedScanner?.displayTitle ?? "Flatbed"
+            metadataSummary = "\(scanner) · Full Page · \(snap.settings.colorMode.displayName)"
+        case .export:
+            let base = dimensionsReadout
+            let fmt = snap.settings.outputFormat.displayName
+            metadataSummary = base.isEmpty ? fmt : "\(base) · \(fmt)"
+        case nil:
+            metadataSummary = dimensionsReadout
+        }
+
+        return RemoteOperationDisplayInfo(
+            title: title,
+            statusDetail: statusDetail,
+            trailingBadge: trailingBadge,
+            progressFraction: fraction,
+            metadataSummary: metadataSummary
+        )
+    }
+
+    static func formatMegabytes(_ bytes: Int64) -> String {
+        let mb = Double(max(0, bytes)) / (1024.0 * 1024.0)
+        return String(format: "%.1f MB", mb)
+    }
+
+    static func formatElapsedSeconds(_ seconds: Double) -> String {
+        let total = max(0, Int(seconds.rounded()))
+        if total >= 60 {
+            let mins = total / 60
+            let secs = total % 60
+            return "\(mins)m \(secs)s"
+        }
+        return "\(total)s"
     }
 
     // MARK: - Incoming Host Messages & Binary Frames

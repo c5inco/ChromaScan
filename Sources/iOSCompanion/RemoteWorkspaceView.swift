@@ -140,31 +140,33 @@ struct RemoteWorkspaceView: View {
                     emptyCanvasView(showingScan: showingScan, snap: snap)
                 }
 
-                // Floating top-left summary pill & top-right Full Page reset
-                VStack {
-                    HStack {
-                        if !snap.outputPreviewSummary.isEmpty, store.proxyImage != nil {
-                            Text(snap.outputPreviewSummary)
-                                .font(.caption2.monospacedDigit())
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 5)
-                                .background(Color.black.opacity(0.62), in: Capsule())
-                                .lineLimit(1)
-                        }
-                        Spacer()
-                        if !showingScan && !snap.cropRect.isFull && store.proxyImage != nil {
-                            Button("Full Page") {
-                                store.resetCrop()
-                            }
-                            .font(.caption.weight(.semibold))
-                            .buttonStyle(.bordered)
-                            .controlSize(.mini)
-                            .background(.ultraThinMaterial, in: Capsule())
-                        }
+                // Floating centered top summary pill, Full Page reset & bottom toast
+                VStack(spacing: 6) {
+                    if !snap.outputPreviewSummary.isEmpty, store.proxyImage != nil {
+                        Text(snap.outputPreviewSummary)
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Color.black.opacity(0.62), in: Capsule())
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .allowsHitTesting(false)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 10)
+
+                    if !showingScan && !snap.cropRect.isFull && store.proxyImage != nil {
+                        Button {
+                            store.resetCrop()
+                        } label: {
+                            Label("Full Page", systemImage: "arrow.uturn.backward")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .transition(.opacity.combined(with: .scale(scale: 0.92)))
+                    }
 
                     Spacer()
 
@@ -179,7 +181,10 @@ struct RemoteWorkspaceView: View {
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
+                .padding(.horizontal, 12)
+                .padding(.top, 10)
                 .animation(.easeInOut(duration: 0.2), value: store.toastMessage)
+                .animation(.easeInOut(duration: 0.2), value: snap.cropRect.isFull)
             } else {
                 ProgressView("Syncing session…")
             }
@@ -208,93 +213,148 @@ struct RemoteWorkspaceView: View {
     // MARK: - Bottom Action Dock
 
     private var bottomDock: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 0) {
             if let snap = store.snapshot {
-                // Status & dimensions strip
-                HStack(spacing: 8) {
-                    Text(store.dimensionsReadout)
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Spacer()
-                    Text(store.progress?.statusText ?? snap.statusText)
-                        .font(.caption2.monospacedDigit().weight(.medium))
-                        .foregroundStyle(snap.isErrorStatus ? .red : .secondary)
-                        .lineLimit(1)
-                }
-
-                // Live progress bar when busy
                 if snap.isBusy {
-                    HStack(spacing: 10) {
-                        if let frac = store.progress?.fraction {
-                            ProgressView(value: frac)
-                                .tint(.accentColor)
-                        } else {
-                            ProgressView()
-                                .progressViewStyle(.linear)
-                                .tint(.accentColor)
-                        }
-                        Button("Cancel", role: .destructive) {
-                            store.cancelActiveOperation()
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    }
-                }
-
-                // Main action row
-                let ready = !snap.isBusy && snap.selectedScannerID != nil && snap.capabilities != nil
-                HStack(spacing: 8) {
-                    Button {
-                        store.triggerPreview()
-                    } label: {
-                        Label("Preview", systemImage: "eye")
-                            .font(.subheadline.weight(.medium))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 4)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.regular)
-                    .disabled(!ready || snap.capabilities?.platen == nil)
-
-                    Button {
-                        store.triggerScan()
-                    } label: {
-                        Label("Scan", systemImage: "scanner")
-                            .font(.subheadline.weight(.semibold))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 4)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
-                    .disabled(!ready)
-
-                    Button {
-                        store.triggerExport()
-                    } label: {
-                        Label("Export", systemImage: "square.and.arrow.down")
-                            .font(.subheadline.weight(.medium))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
-                            .padding(.vertical, 4)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.regular)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .disabled(snap.isBusy || !snap.hasScanImage)
+                    activeOperationDock(snap: snap)
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .move(edge: .bottom)),
+                            removal: .opacity
+                        ))
+                } else {
+                    idleActionDock(snap: snap)
+                        .transition(.opacity)
                 }
             }
         }
         .padding(.horizontal, 14)
         .padding(.top, 10)
         .padding(.bottom, 12)
+        .frame(maxWidth: .infinity)
+        .clipped()
         .background(.bar)
         .overlay(alignment: .top) {
             Divider()
+        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.88), value: store.snapshot?.isBusy ?? false)
+    }
+
+    private func idleActionDock(snap: SessionSnapshot) -> some View {
+        let ready = snap.selectedScannerID != nil && snap.capabilities != nil
+
+        return VStack(spacing: 10) {
+            // Status & dimensions strip
+            HStack(spacing: 8) {
+                Text(store.dimensionsReadout)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer()
+                Text(snap.statusText)
+                    .font(.caption2.monospacedDigit().weight(.medium))
+                    .foregroundStyle(snap.isErrorStatus ? .red : .secondary)
+                    .lineLimit(1)
+            }
+
+            // Main action row
+            HStack(spacing: 8) {
+                Button {
+                    store.triggerPreview()
+                } label: {
+                    Label("Preview", systemImage: "eye")
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .disabled(!ready || snap.capabilities?.platen == nil)
+
+                Button {
+                    store.triggerScan()
+                } label: {
+                    Label("Scan", systemImage: "scanner")
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .disabled(!ready)
+
+                Button {
+                    store.triggerExport()
+                } label: {
+                    Label("Export", systemImage: "square.and.arrow.down")
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .padding(.vertical, 4)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .fixedSize(horizontal: true, vertical: false)
+                .disabled(!snap.hasScanImage)
+            }
+        }
+    }
+
+    private func activeOperationDock(snap: SessionSnapshot) -> some View {
+        let info = store.activeOperationInfo
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.accentColor)
+
+                Text(info.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                Button("Cancel", role: .destructive) {
+                    store.cancelActiveOperation()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(.red)
+            }
+
+            ScanningProgressBar(fraction: info.progressFraction)
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(info.statusDetail)
+                        .font(.caption.monospacedDigit().weight(.medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+
+                    Spacer(minLength: 8)
+
+                    if let badge = info.trailingBadge {
+                        Text(badge)
+                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(info.progressFraction != nil ? Color.accentColor : .secondary)
+                            .lineLimit(1)
+                    }
+                }
+
+                if !info.metadataSummary.isEmpty {
+                    Text(info.metadataSummary)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+            }
         }
     }
 
@@ -320,5 +380,56 @@ struct RemoteWorkspaceView: View {
             }
             return "No Scanner Selected"
         }
+    }
+}
+
+private struct ScanningProgressBar: View {
+    let fraction: Double?
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isSweeping = false
+
+    var body: some View {
+        GeometryReader { geo in
+            let width = max(0, geo.size.width)
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.primary.opacity(0.12))
+
+                if let fraction {
+                    let clamped = max(0, min(1, fraction))
+                    Capsule()
+                        .fill(Color.accentColor)
+                        .frame(width: clamped > 0 ? max(6, width * clamped) : 0)
+                        .animation(.easeOut(duration: 0.2), value: clamped)
+                } else if reduceMotion {
+                    Capsule()
+                        .fill(Color.accentColor.opacity(0.65))
+                        .frame(width: width)
+                } else {
+                    let segmentWidth = max(48, width * 0.32)
+                    let travel = max(0, width - segmentWidth)
+                    Capsule()
+                        .fill(Color.accentColor)
+                        .frame(width: segmentWidth)
+                        .offset(x: isSweeping ? travel : 0)
+                        .task {
+                            isSweeping = false
+                            await Task.yield()
+                            withAnimation(.easeInOut(duration: 1.15).repeatForever(autoreverses: true)) {
+                                isSweeping = true
+                            }
+                        }
+                        .onDisappear {
+                            isSweeping = false
+                        }
+                }
+            }
+            .clipShape(Capsule())
+        }
+        .frame(height: 6)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Operation progress")
+        .accessibilityValue(fraction.map { "\(Int(($0 * 100).rounded())) percent" } ?? "In progress")
     }
 }

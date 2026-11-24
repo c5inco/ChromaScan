@@ -73,6 +73,74 @@ final class ChromaScanRemoteTests: XCTestCase {
         }
     }
 
+    func testActiveOperationDisplayInfoAcrossScanLifecycle() async throws {
+        XCTAssertEqual(RemoteSessionStore.formatElapsedSeconds(14.2), "14s")
+        XCTAssertEqual(RemoteSessionStore.formatElapsedSeconds(75.0), "1m 15s")
+        XCTAssertEqual(RemoteSessionStore.formatMegabytes(5 * 1024 * 1024), "5.0 MB")
+
+        let mockHost = try LoopbackMockMacHost(pin: "123456")
+        let port = try await mockHost.start()
+        defer { mockHost.stop() }
+
+        let tokenStore = KeychainTokenStore()
+        tokenStore.deleteToken(for: "mock-mac-studio")
+        tokenStore.deleteToken(for: "manual:127.0.0.1:\(port)")
+
+        let store = RemoteSessionStore(clientName: "Simulator iPhone", tokenStore: tokenStore)
+        defer { store.disconnect() }
+
+        store.connectManual(host: "127.0.0.1", port: port, pin: "123456")
+        try await waitUntil(timeout: 3.0) {
+            if case .connected = store.phase, store.snapshot != nil { return true }
+            return false
+        }
+
+        // Trigger scan -> warm-up phase (bytesReceived == 0) is indeterminate
+        store.triggerScan()
+        try await waitUntil(timeout: 2.0) {
+            store.snapshot?.isBusy == true && store.progress != nil
+        }
+        let warmup = store.activeOperationInfo
+        XCTAssertEqual(warmup.title, "Scanning · 1200 DPI")
+        XCTAssertNil(warmup.progressFraction)
+        XCTAssertTrue(warmup.statusDetail.contains("expected"))
+        XCTAssertFalse(warmup.metadataSummary.isEmpty)
+
+        // Advance to active transfer -> determinate fraction & percentage badge
+        mockHost.broadcastProgress(
+            operation: .scan,
+            bytesReceived: 40 * 1024 * 1024,
+            expectedBytes: 100 * 1024 * 1024,
+            elapsedSeconds: 12,
+            statusText: "Scanning 1200 DPI · 40.0 / 100.0 MB (12s)"
+        )
+        try await waitUntil(timeout: 2.0) { store.progress?.bytesReceived == 40 * 1024 * 1024 }
+        let transferring = store.activeOperationInfo
+        XCTAssertEqual(transferring.title, "Scanning · 1200 DPI")
+        XCTAssertEqual(transferring.progressFraction ?? -1, 0.4, accuracy: 0.001)
+        XCTAssertEqual(transferring.trailingBadge, "40%")
+        XCTAssertEqual(transferring.statusDetail, "40.0 MB / 100.0 MB · 12s")
+
+        // Advance to processing & saving phase -> switches back to indeterminate with elapsed badge
+        mockHost.broadcastProgress(
+            operation: .scan,
+            bytesReceived: 100 * 1024 * 1024,
+            expectedBytes: 100 * 1024 * 1024,
+            elapsedSeconds: 68,
+            statusText: "Processing & saving (Display P3)…"
+        )
+        try await waitUntil(timeout: 2.0) { store.progress?.statusText == "Processing & saving (Display P3)…" }
+        let processing = store.activeOperationInfo
+        XCTAssertEqual(processing.title, "Processing & Saving")
+        XCTAssertNil(processing.progressFraction)
+        XCTAssertEqual(processing.statusDetail, "Processing & saving (Display P3)…")
+        XCTAssertEqual(processing.trailingBadge, "1m 8s")
+
+        // Cancel -> returns to idle and clears progress
+        store.cancelActiveOperation()
+        try await waitUntil(timeout: 2.0) { store.snapshot?.isBusy == false && store.progress == nil }
+    }
+
     private func waitUntil(timeout: TimeInterval, condition: @escaping @MainActor () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition() {
@@ -97,6 +165,9 @@ private final class LoopbackMockMacHost {
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private var currentViewMode: CanvasViewMode = .preview
+    private var isBusy: Bool = false
+    private var activeOperation: CompanionOperation?
+    private var currentStatusText: String = "Ready"
 
     init(pin: String) throws {
         self.pin = pin
@@ -207,8 +278,46 @@ private final class LoopbackMockMacHost {
         case .requestTile(let requestID, let rect, _):
             sendSyntheticImage(kind: .highResTile, requestID: requestID, normRect: rect, on: conn)
 
+        case .triggerScan:
+            isBusy = true
+            activeOperation = .scan
+            currentStatusText = "Scanning 1200 DPI…"
+            sendText(.snapshot(snapshot: makeSnapshot()), on: conn)
+            sendText(.progress(
+                operation: .scan,
+                bytesReceived: 0,
+                expectedBytes: 100 * 1024 * 1024,
+                elapsedSeconds: 0,
+                statusText: currentStatusText
+            ), on: conn)
+
+        case .cancel:
+            isBusy = false
+            activeOperation = nil
+            currentStatusText = "Scan cancelled"
+            sendText(.snapshot(snapshot: makeSnapshot()), on: conn)
+
         default:
             break
+        }
+    }
+
+    func broadcastProgress(
+        operation: CompanionOperation,
+        bytesReceived: Int64,
+        expectedBytes: Int64,
+        elapsedSeconds: Double,
+        statusText: String
+    ) {
+        currentStatusText = statusText
+        for conn in connections {
+            sendText(.progress(
+                operation: operation,
+                bytesReceived: bytesReceived,
+                expectedBytes: expectedBytes,
+                elapsedSeconds: elapsedSeconds,
+                statusText: statusText
+            ), on: conn)
         }
     }
 
@@ -231,9 +340,9 @@ private final class LoopbackMockMacHost {
             settings: ScanSessionSettings(),
             cropRect: .full,
             viewMode: currentViewMode,
-            isBusy: false,
-            activeOperation: nil,
-            statusText: "Ready",
+            isBusy: isBusy,
+            activeOperation: activeOperation,
+            statusText: currentStatusText,
             isErrorStatus: false,
             hasPreviewImage: true,
             hasScanImage: true,
