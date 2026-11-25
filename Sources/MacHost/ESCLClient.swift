@@ -75,7 +75,7 @@ final class ESCLClient: ESCLClientProtocol, Sendable {
 
         guard let httpResp = postResp as? HTTPURLResponse,
               let locationStr = httpResp.value(forHTTPHeaderField: "Location"),
-              let jobURL = Self.resolveJobURL(location: locationStr, relativeTo: scanner) else {
+              let jobURL = Self.resolveJobURL(location: locationStr, relativeTo: scanner, postURL: jobsURL) else {
             throw ESCLClientError.missingJobLocation
         }
 
@@ -118,36 +118,39 @@ final class ESCLClient: ESCLClientProtocol, Sendable {
         _ = try? await session.data(for: req)
     }
 
-    /// Resolves an eSCL `Location` header relative to `scanner.baseURL`.
-    /// For USB loopback scanners (`127.0.0.1` / `localhost`), rewrites absolute `Location` URLs
-    /// (which printers often emit as `http://localhost/eSCL/...` without the ephemeral bridge port,
-    /// or with their Wi-Fi hostname/IP) onto `scanner.baseURL`'s scheme, host, and port so
-    /// `NextDocument`, `ScanImageInfo`, and `DELETE` stay on the active USB link.
-    static func resolveJobURL(location: String, relativeTo scanner: DiscoveredScanner) -> URL? {
+    /// Resolves an eSCL `Location` header relative to the `POST /eSCL/ScanJobs` URL and `scanner.baseURL`.
+    /// Preserves percent-encoded path segments and query strings, and for USB loopback scanners
+    /// rewrites ONLY the scheme, host, and port onto `scanner.baseURL`'s authority so `NextDocument`,
+    /// `ScanImageInfo`, and `DELETE` stay on the active USB loopback link.
+    static func resolveJobURL(
+        location: String,
+        relativeTo scanner: DiscoveredScanner,
+        postURL: URL? = nil
+    ) -> URL? {
         let trimmed = location.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        guard var baseComps = URLComponents(url: scanner.baseURL, resolvingAgainstBaseURL: false) else {
-            return URL(string: trimmed)
+
+        let referenceURL = postURL ?? scanner.baseURL.appendingPathComponent("ScanJobs")
+        guard let resolved = URL(string: trimmed, relativeTo: referenceURL)?.absoluteURL else {
+            return nil
         }
 
-        if let parsed = URLComponents(string: trimmed), parsed.scheme != nil {
-            let cleanHost = scanner.host.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased()
-            let isLoopbackScanner = scanner.transport == .usb
-                || cleanHost == "127.0.0.1"
-                || cleanHost == "localhost"
-            if isLoopbackScanner {
-                let path = parsed.path.isEmpty ? "/" : parsed.path
-                baseComps.path = path.hasPrefix("/") ? path : "/\(path)"
-                baseComps.query = parsed.query
-                return baseComps.url
-            }
-            return parsed.url
+        let cleanHost = scanner.host.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased()
+        let isLoopbackScanner = scanner.transport == .usb
+            || cleanHost == "127.0.0.1"
+            || cleanHost == "localhost"
+            || cleanHost == "::1"
+
+        guard isLoopbackScanner,
+              let baseComps = URLComponents(url: scanner.baseURL, resolvingAgainstBaseURL: false),
+              var resolvedComps = URLComponents(url: resolved, resolvingAgainstBaseURL: false) else {
+            return resolved
         }
 
-        let path = trimmed.hasPrefix("/") ? trimmed : "/\(trimmed)"
-        baseComps.path = path
-        baseComps.query = nil
-        return baseComps.url
+        resolvedComps.scheme = baseComps.scheme
+        resolvedComps.host = baseComps.host
+        resolvedComps.port = baseComps.port
+        return resolvedComps.url
     }
 
     private func fetchScanImageInfo(jobURL: URL) async throws -> ScanImageInfo {

@@ -510,6 +510,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSMenuI
                 : (engine.rawPreviewBuffer != nil)
         case #selector(resetCrop):
             return !engine.isBusy && engine.viewMode == .preview && !engine.cropRect.isFull
+        case #selector(refreshScannersClicked):
+            return !engine.isBusy
         default:
             return true
         }

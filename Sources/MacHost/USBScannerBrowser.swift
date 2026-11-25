@@ -82,7 +82,6 @@ enum USBConfigurationDescriptorParser {
 
         flushCurrent()
 
-        // Deduplicate by interfaceNumber (preferring lower alternateSetting if somehow repeated)
         var seen = Set<UInt8>()
         return results
             .sorted { ($0.interfaceNumber, $0.alternateSetting) < ($1.interfaceNumber, $1.alternateSetting) }
@@ -94,6 +93,9 @@ enum USBConfigurationDescriptorParser {
 
 /// Watches for hot-plugged USB devices advertising IPP-over-USB (`0x07/0x01/0x04`) interfaces
 /// on any alternate setting and spins up a lazy local `IPPUSBBridge` (`127.0.0.1:<port>`) per device.
+///
+/// All IOKit notification port setup, initial iterator draining, callback handling, and teardown
+/// are strictly serialized on `ioQueue` so IOKit callbacks can never race teardown or touch a freed context.
 @MainActor
 final class USBScannerBrowser {
     var onScannersChanged: (([DiscoveredScanner]) -> Void)?
@@ -103,119 +105,6 @@ final class USBScannerBrowser {
         let scanner: DiscoveredScanner
         let bridge: IPPUSBBridge
     }
-
-    private let ioQueue = DispatchQueue(label: "com.chromascan.usb.discovery")
-    private var notificationPort: IONotificationPortRef?
-    private var matchedIterator: io_iterator_t = 0
-    private var terminatedIterator: io_iterator_t = 0
-    private var callbackContext: Unmanaged<NotificationBridge>?
-    private var trackedByEntryID: [UInt64: TrackedUSBDevice] = [:]
-    private var isStarted = false
-
-    private final class NotificationBridge: @unchecked Sendable {
-        weak var owner: USBScannerBrowser?
-        init(owner: USBScannerBrowser) { self.owner = owner }
-    }
-
-    func start() {
-        stop()
-        isStarted = true
-
-        guard let port = IONotificationPortCreate(kIOMainPortDefault) else {
-            usbBrowserLog.error("Failed to create IOKit notification port")
-            return
-        }
-        IONotificationPortSetDispatchQueue(port, ioQueue)
-        self.notificationPort = port
-
-        let bridge = NotificationBridge(owner: self)
-        let retained = Unmanaged.passRetained(bridge)
-        self.callbackContext = retained
-        let refCon = retained.toOpaque()
-
-        // 1. Register arrival notification (also yields all currently attached USB devices)
-        let matchDict = IOServiceMatching(kIOUSBDeviceClassName)
-        var matchIter: io_iterator_t = 0
-        let matchKR = IOServiceAddMatchingNotification(
-            port,
-            kIOFirstMatchNotification,
-            matchDict,
-            { refCon, iterator in
-                guard let refCon else { return }
-                let box = Unmanaged<NotificationBridge>.fromOpaque(refCon).takeUnretainedValue()
-                let devices = USBScannerBrowser.drainArrivedDevices(from: iterator)
-                Task { @MainActor in
-                    box.owner?.handleArrivedDevices(devices)
-                }
-            },
-            refCon,
-            &matchIter
-        )
-
-        if matchKR == KERN_SUCCESS {
-            self.matchedIterator = matchIter
-            let initial = Self.drainArrivedDevices(from: matchIter)
-            handleArrivedDevices(initial)
-        } else {
-            usbBrowserLog.error("IOServiceAddMatchingNotification(firstMatch) failed: \(matchKR)")
-        }
-
-        // 2. Register termination notification (USB unplug detection)
-        let termDict = IOServiceMatching(kIOUSBDeviceClassName)
-        var termIter: io_iterator_t = 0
-        let termKR = IOServiceAddMatchingNotification(
-            port,
-            kIOTerminatedNotification,
-            termDict,
-            { refCon, iterator in
-                guard let refCon else { return }
-                let box = Unmanaged<NotificationBridge>.fromOpaque(refCon).takeUnretainedValue()
-                let removedIDs = USBScannerBrowser.drainTerminatedEntryIDs(from: iterator)
-                Task { @MainActor in
-                    box.owner?.handleRemovedEntryIDs(removedIDs)
-                }
-            },
-            refCon,
-            &termIter
-        )
-
-        if termKR == KERN_SUCCESS {
-            self.terminatedIterator = termIter
-            // Drain initial iterator to arm future termination notifications
-            _ = Self.drainTerminatedEntryIDs(from: termIter)
-        } else {
-            usbBrowserLog.error("IOServiceAddMatchingNotification(terminated) failed: \(termKR)")
-        }
-    }
-
-    func stop() {
-        isStarted = false
-
-        if matchedIterator != 0 {
-            IOObjectRelease(matchedIterator)
-            matchedIterator = 0
-        }
-        if terminatedIterator != 0 {
-            IOObjectRelease(terminatedIterator)
-            terminatedIterator = 0
-        }
-        if let port = notificationPort {
-            IONotificationPortSetDispatchQueue(port, nil)
-            IONotificationPortDestroy(port)
-            notificationPort = nil
-        }
-        if let ctx = callbackContext {
-            ctx.release()
-            callbackContext = nil
-        }
-
-        for tracked in trackedByEntryID.values {
-            tracked.bridge.stop()
-        }
-        trackedByEntryID.removeAll()
-    }
-
-    // MARK: - Device Arrival / Removal
 
     private struct DiscoveredUSBDeviceInfo: Sendable {
         let entryID: UInt64
@@ -228,103 +117,218 @@ final class USBScannerBrowser {
         let interfaces: [IPPUSBInterfaceDescriptor]
     }
 
-    private func handleArrivedDevices(_ infos: [DiscoveredUSBDeviceInfo]) {
-        guard isStarted, !infos.isEmpty else { return }
-        var changed = false
+    /// Exclusively owned by `ioQueue` — never mutated from the main actor.
+    private final class IOState: @unchecked Sendable {
+        var notificationPort: IONotificationPortRef?
+        var matchedIterator: io_iterator_t = 0
+        var terminatedIterator: io_iterator_t = 0
+        var callbackContext: Unmanaged<NotificationBridge>?
+        var activeGeneration: UInt64 = 0
+    }
 
-        for info in infos {
-            guard trackedByEntryID[info.entryID] == nil else { continue }
-            guard !info.interfaces.isEmpty else { continue }
+    private final class NotificationBridge: @unchecked Sendable {
+        weak var owner: USBScannerBrowser?
+        let generation: UInt64
+        init(owner: USBScannerBrowser, generation: UInt64) {
+            self.owner = owner
+            self.generation = generation
+        }
+    }
 
-            let deviceKey = info.serialNumber ?? String(format: "%04x-%04x-%08x", info.vendorID, info.productID, info.locationID)
-            let interfaces = info.interfaces
-            let locationID = info.locationID
-            let vendorID = info.vendorID
-            let productID = info.productID
+    private let ioQueue = DispatchQueue(label: "com.chromascan.usb.discovery")
+    private let ioState = IOState()
+    private var trackedByEntryID: [UInt64: TrackedUSBDevice] = [:]
+    private var generation: UInt64 = 0
+    private var isStarted = false
 
-            let bridge = IPPUSBBridge(
-                deviceIdentifier: deviceKey,
-                channelCount: interfaces.count,
-                idleReleaseSeconds: 4.0
-            ) { slotIndex in
-                let desc = interfaces[min(slotIndex, interfaces.count - 1)]
-                guard let ifService = Self.findInterfaceService(
-                    vendorID: vendorID,
-                    productID: productID,
-                    locationID: locationID,
-                    interfaceNumber: desc.interfaceNumber
-                ) else {
-                    throw IPPUSBBridgeError.interfaceNotFound(desc.interfaceNumber)
-                }
-                defer { IOObjectRelease(ifService) }
-                return try IOUSBHostChannelTransport(ioService: ifService, descriptor: desc)
-            }
+    func start() {
+        stop()
+        isStarted = true
+        generation &+= 1
+        let startGen = generation
+        let state = ioState
 
-            do {
-                let boundPort = try bridge.start()
-                let displayName = DiscoveredScanner.usbDisplayName(
-                    vendor: info.vendorName,
-                    product: info.productName
-                )
-                let modelName: String? = {
-                    let cleanProd = info.productName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    let cleanVend = info.vendorName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    if !cleanProd.isEmpty {
-                        if !cleanVend.isEmpty && !cleanProd.lowercased().hasPrefix(cleanVend.lowercased()) {
-                            return "\(cleanVend) \(cleanProd)"
-                        }
-                        return cleanProd
-                    }
-                    return nil
-                }()
-                let idSuffix = (info.serialNumber?.isEmpty == false)
-                    ? info.serialNumber!
-                    : String(format: "%04x:%04x:%08x", info.vendorID, info.productID, info.locationID)
+        ioQueue.async { [weak self] in
+            guard let self else { return }
+            Self.startIOKitOnQueue(owner: self, state: state, generation: startGen)
+        }
+    }
 
-                let scanner = DiscoveredScanner(
-                    id: "usb:\(idSuffix)",
-                    name: displayName,
-                    host: "127.0.0.1",
-                    port: Int(boundPort),
-                    useTLS: false,
-                    rootPath: "eSCL",
-                    modelName: modelName,
-                    uuid: nil,
-                    transport: .usb,
-                    serialNumber: info.serialNumber,
-                    usbLocationID: info.locationID
-                )
-
-                trackedByEntryID[info.entryID] = TrackedUSBDevice(
-                    entryID: info.entryID,
-                    scanner: scanner,
-                    bridge: bridge
-                )
-                changed = true
-                usbBrowserLog.notice("Discovered USB IPP-USB scanner '\(displayName, privacy: .public)' (interfaces=\(interfaces.count), port=\(boundPort))")
-            } catch {
-                bridge.stop()
-                usbBrowserLog.error("Failed to start IPPUSBBridge for \(deviceKey, privacy: .public): \(error.localizedDescription, privacy: .public)")
+    /// Performs an additive USB rescan without tearing down existing live bridges or changing their ports.
+    func refresh() {
+        guard isStarted else {
+            start()
+            return
+        }
+        let currentGen = generation
+        ioQueue.async { [weak self] in
+            guard let self else { return }
+            let snapshot = Self.scanCurrentlyAttachedDevices()
+            Task { @MainActor [weak self] in
+                guard let self, self.isStarted, self.generation == currentGen else { return }
+                self.reconcileScannedDevices(snapshot)
             }
         }
+    }
 
+    func stop() {
+        isStarted = false
+        generation &+= 1
+
+        let bridgesToStop = Array(trackedByEntryID.values.map(\.bridge))
+        trackedByEntryID.removeAll()
+
+        let state = ioState
+        // Serialize IOKit teardown on ioQueue so no in-flight callback can touch freed iterators/context.
+        ioQueue.async {
+            Self.stopIOKitOnQueue(state: state)
+            for bridge in bridgesToStop {
+                bridge.stop()
+            }
+        }
+    }
+
+    // MARK: - Device Arrival / Removal (MainActor)
+
+    private func handleArrivedDevices(_ infos: [DiscoveredUSBDeviceInfo], generation eventGen: UInt64) {
+        guard isStarted, generation == eventGen, !infos.isEmpty else { return }
+        var changed = false
+        for info in infos {
+            if addTrackedDeviceIfNeeded(info) {
+                changed = true
+            }
+        }
         if changed {
             publishScanners()
         }
     }
 
-    private func handleRemovedEntryIDs(_ entryIDs: [UInt64]) {
-        guard isStarted, !entryIDs.isEmpty else { return }
+    private func handleRemovedEntryIDs(_ entryIDs: [UInt64], generation eventGen: UInt64) {
+        guard isStarted, generation == eventGen, !entryIDs.isEmpty else { return }
         var changed = false
+        var bridgesToStop: [IPPUSBBridge] = []
         for id in entryIDs {
             if let removed = trackedByEntryID.removeValue(forKey: id) {
-                removed.bridge.stop()
+                bridgesToStop.append(removed.bridge)
                 changed = true
                 usbBrowserLog.notice("USB scanner disconnected: '\(removed.scanner.displayTitle, privacy: .public)'")
             }
         }
+        if !bridgesToStop.isEmpty {
+            let stopList = bridgesToStop
+            ioQueue.async {
+                for bridge in stopList {
+                    bridge.stop()
+                }
+            }
+        }
         if changed {
             publishScanners()
+        }
+    }
+
+    private func reconcileScannedDevices(_ snapshot: [DiscoveredUSBDeviceInfo]) {
+        var changed = false
+        let liveIDs = Set(snapshot.map(\.entryID))
+
+        // Remove any devices that are no longer attached
+        var bridgesToStop: [IPPUSBBridge] = []
+        for entryID in Array(trackedByEntryID.keys) where !liveIDs.contains(entryID) {
+            if let removed = trackedByEntryID.removeValue(forKey: entryID) {
+                bridgesToStop.append(removed.bridge)
+                changed = true
+            }
+        }
+        if !bridgesToStop.isEmpty {
+            let stopList = bridgesToStop
+            ioQueue.async {
+                for bridge in stopList {
+                    bridge.stop()
+                }
+            }
+        }
+
+        // Add any newly detected devices while keeping existing bridges untouched
+        for info in snapshot {
+            if addTrackedDeviceIfNeeded(info) {
+                changed = true
+            }
+        }
+        if changed {
+            publishScanners()
+        }
+    }
+
+    private func addTrackedDeviceIfNeeded(_ info: DiscoveredUSBDeviceInfo) -> Bool {
+        guard trackedByEntryID[info.entryID] == nil else { return false }
+        guard !info.interfaces.isEmpty else { return false }
+
+        let deviceKey = info.serialNumber ?? String(format: "%04x-%04x-%08x", info.vendorID, info.productID, info.locationID)
+        let interfaces = info.interfaces
+        let deviceEntryID = info.entryID
+
+        let bridge = IPPUSBBridge(
+            deviceIdentifier: deviceKey,
+            channelCount: interfaces.count,
+            idleReleaseSeconds: 4.0
+        ) { slotIndex in
+            let desc = interfaces[min(slotIndex, interfaces.count - 1)]
+            guard let ifService = Self.findInterfaceService(
+                deviceEntryID: deviceEntryID,
+                interfaceNumber: desc.interfaceNumber
+            ) else {
+                throw IPPUSBBridgeError.interfaceNotFound(desc.interfaceNumber)
+            }
+            defer { IOObjectRelease(ifService) }
+            return try IOUSBHostChannelTransport(ioService: ifService, descriptor: desc)
+        }
+
+        do {
+            let boundPort = try bridge.start()
+            let displayName = DiscoveredScanner.usbDisplayName(
+                vendor: info.vendorName,
+                product: info.productName
+            )
+            let modelName: String? = {
+                let cleanProd = info.productName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let cleanVend = info.vendorName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if !cleanProd.isEmpty {
+                    if !cleanVend.isEmpty && !cleanProd.lowercased().hasPrefix(cleanVend.lowercased()) {
+                        return "\(cleanVend) \(cleanProd)"
+                    }
+                    return cleanProd
+                }
+                return nil
+            }()
+            let idSuffix = (info.serialNumber?.isEmpty == false)
+                ? info.serialNumber!
+                : String(format: "%04x:%04x:%08x", info.vendorID, info.productID, info.locationID)
+
+            let scanner = DiscoveredScanner(
+                id: "usb:\(idSuffix)",
+                name: displayName,
+                host: "127.0.0.1",
+                port: Int(boundPort),
+                useTLS: false,
+                rootPath: "eSCL",
+                modelName: modelName,
+                uuid: nil,
+                transport: .usb,
+                serialNumber: info.serialNumber,
+                usbLocationID: info.locationID
+            )
+
+            trackedByEntryID[info.entryID] = TrackedUSBDevice(
+                entryID: info.entryID,
+                scanner: scanner,
+                bridge: bridge
+            )
+            usbBrowserLog.notice("Discovered USB IPP-USB scanner '\(displayName, privacy: .public)' (interfaces=\(interfaces.count), port=\(boundPort))")
+            return true
+        } catch {
+            bridge.stop()
+            usbBrowserLog.error("Failed to start IPPUSBBridge for \(deviceKey, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
@@ -333,6 +337,119 @@ final class USBScannerBrowser {
             .map(\.scanner)
             .sorted { $0.displayTitle.localizedCaseInsensitiveCompare($1.displayTitle) == .orderedAscending }
         onScannersChanged?(sorted)
+    }
+
+    // MARK: - ioQueue-Serialized IOKit Setup & Teardown
+
+    private nonisolated static func startIOKitOnQueue(owner: USBScannerBrowser, state: IOState, generation: UInt64) {
+        stopIOKitOnQueue(state: state)
+        state.activeGeneration = generation
+
+        guard let port = IONotificationPortCreate(kIOMainPortDefault) else {
+            usbBrowserLog.error("Failed to create IOKit notification port")
+            return
+        }
+        state.notificationPort = port
+
+        let bridge = NotificationBridge(owner: owner, generation: generation)
+        let retained = Unmanaged.passRetained(bridge)
+        state.callbackContext = retained
+        let refCon = retained.toOpaque()
+
+        // Register notifications before attaching dispatch queue so initial drain on this serial
+        // queue cannot race against live hot-plug callbacks.
+        let matchDict = IOServiceMatching(kIOUSBDeviceClassName)
+        var matchIter: io_iterator_t = 0
+        let matchKR = IOServiceAddMatchingNotification(
+            port,
+            kIOFirstMatchNotification,
+            matchDict,
+            { refCon, iterator in
+                guard let refCon else { return }
+                let box = Unmanaged<NotificationBridge>.fromOpaque(refCon).takeUnretainedValue()
+                let devices = USBScannerBrowser.drainArrivedDevices(from: iterator)
+                let gen = box.generation
+                Task { @MainActor in
+                    box.owner?.handleArrivedDevices(devices, generation: gen)
+                }
+            },
+            refCon,
+            &matchIter
+        )
+
+        var initialDevices: [DiscoveredUSBDeviceInfo] = []
+        if matchKR == KERN_SUCCESS {
+            state.matchedIterator = matchIter
+            initialDevices = drainArrivedDevices(from: matchIter)
+        } else {
+            usbBrowserLog.error("IOServiceAddMatchingNotification(firstMatch) failed: \(matchKR)")
+        }
+
+        let termDict = IOServiceMatching(kIOUSBDeviceClassName)
+        var termIter: io_iterator_t = 0
+        let termKR = IOServiceAddMatchingNotification(
+            port,
+            kIOTerminatedNotification,
+            termDict,
+            { refCon, iterator in
+                guard let refCon else { return }
+                let box = Unmanaged<NotificationBridge>.fromOpaque(refCon).takeUnretainedValue()
+                let removedIDs = USBScannerBrowser.drainTerminatedEntryIDs(from: iterator)
+                let gen = box.generation
+                Task { @MainActor in
+                    box.owner?.handleRemovedEntryIDs(removedIDs, generation: gen)
+                }
+            },
+            refCon,
+            &termIter
+        )
+
+        if termKR == KERN_SUCCESS {
+            state.terminatedIterator = termIter
+            _ = drainTerminatedEntryIDs(from: termIter)
+        } else {
+            usbBrowserLog.error("IOServiceAddMatchingNotification(terminated) failed: \(termKR)")
+        }
+
+        // Arm future callbacks on the owner's serial ioQueue now that initial draining is complete.
+        IONotificationPortSetDispatchQueue(port, owner.ioQueue)
+
+        if !initialDevices.isEmpty {
+            Task { @MainActor [weak owner] in
+                owner?.handleArrivedDevices(initialDevices, generation: generation)
+            }
+        }
+    }
+
+    private nonisolated static func stopIOKitOnQueue(state: IOState) {
+        state.activeGeneration &+= 1
+        if let port = state.notificationPort {
+            IONotificationPortSetDispatchQueue(port, nil)
+            IONotificationPortDestroy(port)
+            state.notificationPort = nil
+        }
+        if state.matchedIterator != 0 {
+            IOObjectRelease(state.matchedIterator)
+            state.matchedIterator = 0
+        }
+        if state.terminatedIterator != 0 {
+            IOObjectRelease(state.terminatedIterator)
+            state.terminatedIterator = 0
+        }
+        if let ctx = state.callbackContext {
+            state.callbackContext = nil
+            ctx.release()
+        }
+    }
+
+    private nonisolated static func scanCurrentlyAttachedDevices() -> [DiscoveredUSBDeviceInfo] {
+        let matching = IOServiceMatching(kIOUSBDeviceClassName)
+        var iter: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iter) == KERN_SUCCESS else {
+            return []
+        }
+        defer { IOObjectRelease(iter) }
+        return drainArrivedDevices(from: iter)
     }
 
     // MARK: - Non-Isolated IOKit Descriptor Inspection
@@ -372,6 +489,10 @@ final class USBScannerBrowser {
         // Fast skip for Apple hubs / internal controllers
         if vendorID == 0x05AC { return nil }
 
+        // Pre-filter purely via non-exclusive IORegistry properties so we NEVER take an exclusive
+        // IOUSBHostDevice open on unrelated USB devices (keyboards, hubs, audio interfaces, phones).
+        guard looksLikePrinterOrIPPUSBDevice(service) else { return nil }
+
         let locationID = uint32Property(service, key: "locationID") ?? 0
         let vendorName = stringProperty(service, key: "USB Vendor Name")
             ?? stringProperty(service, key: "kUSBVendorString")
@@ -380,7 +501,7 @@ final class USBScannerBrowser {
         let serialNumber = stringProperty(service, key: "USB Serial Number")
             ?? stringProperty(service, key: "kUSBSerialNumberString")
 
-        // 1. Try reading full USB configuration descriptor (finds IPP-USB even on alt setting 1+)
+        // 1. Read full USB configuration descriptor (finds IPP-USB even on alt setting 1+)
         var ippInterfaces = readIPPUSBInterfacesViaHostDevice(service)
 
         // 2. Fallback: if another process (e.g. macOS ippusbd) currently holds exclusive IOUSBHostDevice access,
@@ -401,6 +522,42 @@ final class USBScannerBrowser {
             serialNumber: serialNumber,
             interfaces: ippInterfaces
         )
+    }
+
+    /// Non-exclusive IORegistry pre-filter: returns `true` only if the USB device advertises a
+    /// Printer-class (`0x07`) child interface or includes the `07 01 04` IPP-USB triplet in its
+    /// `UsbDeviceSignature` property.
+    private nonisolated static func looksLikePrinterOrIPPUSBDevice(_ deviceService: io_service_t) -> Bool {
+        if let sig = IORegistryEntryCreateCFProperty(
+            deviceService,
+            "UsbDeviceSignature" as CFString,
+            kCFAllocatorDefault,
+            0
+        )?.takeRetainedValue() as? Data {
+            let pattern = Data([
+                USBConfigurationDescriptorParser.printerClass,
+                USBConfigurationDescriptorParser.printerSubClass,
+                USBConfigurationDescriptorParser.ippUSBProtocol
+            ])
+            if sig.range(of: pattern) != nil {
+                return true
+            }
+        }
+
+        var childIter: io_iterator_t = 0
+        guard IORegistryEntryGetChildIterator(deviceService, kIOServicePlane, &childIter) == KERN_SUCCESS else {
+            return false
+        }
+        defer { IOObjectRelease(childIter) }
+
+        while case let child = IOIteratorNext(childIter), child != 0 {
+            defer { IOObjectRelease(child) }
+            if let cls = intProperty(child, key: "bInterfaceClass"),
+               cls == Int(USBConfigurationDescriptorParser.printerClass) {
+                return true
+            }
+        }
+        return false
     }
 
     private nonisolated static func readIPPUSBInterfacesViaHostDevice(_ service: io_service_t) -> [IPPUSBInterfaceDescriptor] {
@@ -437,8 +594,7 @@ final class USBScannerBrowser {
                 continue
             }
             let alt = UInt8(intProperty(child, key: "bAlternateSetting") ?? 0)
-            // When ippusbd holds the device, endpoint addresses are resolved dynamically if direct
-            // access is ever opened later; record placeholder descriptor so the device is recognized.
+            // Exact endpoint addresses are resolved from iface.configurationDescriptor when opened.
             found.append(IPPUSBInterfaceDescriptor(
                 interfaceNumber: UInt8(ifNum),
                 alternateSetting: alt,
@@ -450,29 +606,29 @@ final class USBScannerBrowser {
         return found.sorted { $0.interfaceNumber < $1.interfaceNumber }
     }
 
+    /// Locates the exact child `IOUSBHostInterface` belonging to `deviceEntryID`, avoiding
+    /// cross-device confusion when two identical VID/PID printers are attached simultaneously.
     private nonisolated static func findInterfaceService(
-        vendorID: UInt16,
-        productID: UInt16,
-        locationID: UInt32,
+        deviceEntryID: UInt64,
         interfaceNumber: UInt8
     ) -> io_service_t? {
-        let matching = IOServiceMatching(kIOUSBInterfaceClassName)
-        var iter: io_iterator_t = 0
-        guard IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iter) == KERN_SUCCESS else {
+        guard let matching = IORegistryEntryIDMatching(deviceEntryID) else { return nil }
+        let deviceService = IOServiceGetMatchingService(kIOMainPortDefault, matching)
+        guard deviceService != 0 else { return nil }
+        defer { IOObjectRelease(deviceService) }
+
+        var childIter: io_iterator_t = 0
+        guard IORegistryEntryGetChildIterator(deviceService, kIOServicePlane, &childIter) == KERN_SUCCESS else {
             return nil
         }
-        defer { IOObjectRelease(iter) }
+        defer { IOObjectRelease(childIter) }
 
-        while case let service = IOIteratorNext(iter), service != 0 {
-            let vid = intProperty(service, key: "idVendor").map(UInt16.init)
-            let pid = intProperty(service, key: "idProduct").map(UInt16.init)
-            let loc = uint32Property(service, key: "locationID")
-            let ifNum = intProperty(service, key: "bInterfaceNumber").map(UInt8.init)
-
-            if vid == vendorID && pid == productID && ifNum == interfaceNumber && (locationID == 0 || loc == locationID) {
-                return service // Caller owns and releases
+        while case let child = IOIteratorNext(childIter), child != 0 {
+            if let ifNum = intProperty(child, key: "bInterfaceNumber").map(UInt8.init),
+               ifNum == interfaceNumber {
+                return child // Caller owns and releases
             }
-            IOObjectRelease(service)
+            IOObjectRelease(child)
         }
         return nil
     }
