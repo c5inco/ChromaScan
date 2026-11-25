@@ -6,3 +6,8 @@ DerivedData/
 *.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
 *.xcodeproj/project.xcworkspace/xcuserdata/
+android/.gradle/
+android/local.properties
+android/.idea/
+android/**/build/
+
