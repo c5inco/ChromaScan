@@ -99,10 +99,11 @@ final class CompanionIntegrationTests: XCTestCase {
         // 6. Remote settings & crop mutation -> reflected on Mac engine + broadcast back
         let newCrop = NormalizedCropRect(x: 0.15, y: 0.20, width: 0.65, height: 0.55)
         ws2.send(.setCropRect(cropRect: newCrop))
-        ws2.send(.updateSettings(patch: ScanSettingsPatch(resolution: 600, rotation: .deg90, colorProfile: .displayP3Convert)))
+        ws2.send(.updateSettings(patch: ScanSettingsPatch(resolution: 600, rotation: .deg90, autoTrimEmptySpace: true, colorProfile: .displayP3Convert)))
         try await waitUntil(timeout: 2.0) {
             engine.settings.resolution == 600
                 && engine.settings.rotation == .deg90
+                && engine.settings.autoTrimEmptySpace == true
                 && engine.cropRect == newCrop
         }
 

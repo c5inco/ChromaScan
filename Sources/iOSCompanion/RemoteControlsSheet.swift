@@ -170,6 +170,12 @@ struct RemoteControlsSheet: View {
                 }
                 .pickerStyle(.segmented)
             }
+
+            Toggle("Auto-trim empty space", isOn: Binding(
+                get: { snap.settings.autoTrimEmptySpace },
+                set: { store.updateSettings(ScanSettingsPatch(autoTrimEmptySpace: $0)) }
+            ))
+            .disabled(snap.isBusy)
         }
     }
 

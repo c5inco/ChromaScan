@@ -72,6 +72,7 @@ struct SessionSnapshot: Codable, Equatable, Sendable {
     let scanPixelWidth: Int?
     let scanPixelHeight: Int?
     let scanDPI: Int?
+    let isScanTrimmed: Bool
 
     var selectedScanner: DiscoveredScanner? {
         guard let selectedScannerID else { return nil }
@@ -106,6 +107,7 @@ enum ClientMessage: Equatable, Sendable {
     case addManualScanner(host: String, port: Int, useTLS: Bool)
     case updateSettings(patch: ScanSettingsPatch)
     case setCropRect(cropRect: NormalizedCropRect)
+    case trimEmptySpace
     case setViewMode(mode: CanvasViewMode)
     case triggerPreview
     case triggerScan
@@ -162,6 +164,8 @@ extension ClientMessage: Codable {
             self = .updateSettings(patch: try c.decode(ScanSettingsPatch.self, forKey: .patch))
         case "setCropRect":
             self = .setCropRect(cropRect: try c.decode(NormalizedCropRect.self, forKey: .cropRect))
+        case "trimEmptySpace":
+            self = .trimEmptySpace
         case "setViewMode":
             self = .setViewMode(mode: try c.decode(CanvasViewMode.self, forKey: .mode))
         case "triggerPreview":
@@ -216,6 +220,8 @@ extension ClientMessage: Codable {
         case .setCropRect(let cropRect):
             try c.encode("setCropRect", forKey: .type)
             try c.encode(cropRect, forKey: .cropRect)
+        case .trimEmptySpace:
+            try c.encode("trimEmptySpace", forKey: .type)
         case .setViewMode(let mode):
             try c.encode("setViewMode", forKey: .type)
             try c.encode(mode, forKey: .mode)

@@ -41,6 +41,7 @@ enum SessionEngineEvent: Sendable {
 final class ScanSessionEngine {
 
     let preferences: AppPreferences
+    let undoManager = UndoManager()
     private let browser: ScannerBrowserProtocol
     private let client: ESCLClientProtocol
 
@@ -53,6 +54,7 @@ final class ScanSessionEngine {
     private(set) var settings: ScanSessionSettings
     private(set) var saveFolderURL: URL
     private(set) var cropRect: NormalizedCropRect = .full
+    private(set) var scanTrimRect: NormalizedCropRect = .full
     private(set) var viewMode: CanvasViewMode = .preview
     private(set) var isBusy: Bool = false
     private(set) var activeOperation: CompanionOperation?
@@ -79,14 +81,22 @@ final class ScanSessionEngine {
     private var activeTask: Task<Void, Never>?
     private var previewRenderTask: Task<Void, Never>?
     private var fullScanRenderTask: Task<Void, Never>?
+    private var trimTask: Task<Void, Never>?
     private var activePowerActivity: NSObjectProtocol?
+    private var previewBufferID = UUID()
+    private var scanBufferID = UUID()
 
     private var observers: [UUID: @MainActor (SessionEngineEvent) -> Void] = [:]
 
     private struct RenderSignature: Equatable {
+        let trimRect: NormalizedCropRect
         let rotation: ScanRotation
         let colorProfile: ColorProfileMode
         let toneAdjustments: ToneAdjustments
+    }
+
+    var isScanTrimmed: Bool {
+        rawScanBuffer != nil && !scanTrimRect.isFull
     }
 
     var selectedScanner: DiscoveredScanner? {
@@ -122,6 +132,7 @@ final class ScanSessionEngine {
             intent: preferences.intent,
             transferFormat: preferences.transferFormat,
             rotation: preferences.rotation,
+            autoTrimEmptySpace: preferences.autoTrimEmptySpace,
             hardwareBrightness: 1000,
             hardwareContrast: 1000,
             colorProfile: preferences.colorProfile,
@@ -156,9 +167,10 @@ final class ScanSessionEngine {
         let scanH: Int?
         let scanDPI: Int?
         if let rawScan = rawScanBuffer {
+            let bounds = ImagePipeline.croppedPixelBounds(of: rawScan, normalizedRect: scanTrimRect)
             let rotated = (settings.rotation == .deg90 || settings.rotation == .deg270)
-            scanW = rotated ? rawScan.height : rawScan.width
-            scanH = rotated ? rawScan.width : rawScan.height
+            scanW = rotated ? bounds.height : bounds.width
+            scanH = rotated ? bounds.width : bounds.height
             scanDPI = rawScan.dpi
         } else {
             scanW = nil
@@ -187,7 +199,8 @@ final class ScanSessionEngine {
             activeImageGeneration: activeImageGeneration,
             scanPixelWidth: scanW,
             scanPixelHeight: scanH,
-            scanDPI: scanDPI
+            scanDPI: scanDPI,
+            isScanTrimmed: isScanTrimmed
         )
     }
 
@@ -386,6 +399,10 @@ final class ScanSessionEngine {
                 settings.transferFormat = tf
                 preferences.transferFormat = tf
             }
+            if let autoTrim = patch.autoTrimEmptySpace {
+                settings.autoTrimEmptySpace = autoTrim
+                preferences.autoTrimEmptySpace = autoTrim
+            }
             if patch.resetHardwareTone == true {
                 settings.hardwareBrightness = defaultHardwareBrightness
                 settings.hardwareContrast = defaultHardwareContrast
@@ -468,6 +485,166 @@ final class ScanSessionEngine {
 
     func resetCrop() {
         setCropRect(.full)
+    }
+
+    func undo() {
+        guard !isBusy, undoManager.canUndo else { return }
+        undoManager.undo()
+    }
+
+    func redo() {
+        guard !isBusy, undoManager.canRedo else { return }
+        undoManager.redo()
+    }
+
+    func trimEmptySpace() {
+        guard !isBusy else { return }
+        trimTask?.cancel()
+
+        switch viewMode {
+        case .preview:
+            guard let previewBuf = rawPreviewBuffer else { return }
+            let bufID = previewBufferID
+            let previousCrop = cropRect
+            trimTask = Task.detached(priority: .userInitiated) { [weak self] in
+                let detected = ImagePipeline.detectContentBounds(in: previewBuf)
+                if Task.isCancelled { return }
+                await MainActor.run { [weak self] in
+                    guard let self, !self.isBusy, self.previewBufferID == bufID else { return }
+                    if let detected, detected != previousCrop {
+                        self.applyPreviewCropWithUndo(
+                            detected,
+                            previousCrop: previousCrop,
+                            bufferID: bufID,
+                            actionName: "Trim Empty Space"
+                        )
+                    } else {
+                        self.statusText = "No empty border detected"
+                        self.isErrorStatus = false
+                        self.broadcastSnapshot()
+                    }
+                }
+            }
+
+        case .scan:
+            guard let scanBuf = rawScanBuffer, scanTrimRect.isFull else { return }
+            let bufID = scanBufferID
+            let previousTrim = scanTrimRect
+            trimTask = Task.detached(priority: .userInitiated) { [weak self] in
+                guard let detected = ImagePipeline.detectContentBounds(in: scanBuf) else {
+                    if Task.isCancelled { return }
+                    await MainActor.run { [weak self] in
+                        guard let self, !self.isBusy, self.scanBufferID == bufID else { return }
+                        self.statusText = "No empty border detected"
+                        self.isErrorStatus = false
+                        self.broadcastSnapshot()
+                    }
+                    return
+                }
+                if Task.isCancelled { return }
+                let trimmedRaw = ImagePipeline.cropRawBuffer(scanBuf, to: detected)
+                let trimmedProxy = ImagePipeline.makeProxyBuffer(from: trimmedRaw, maxDimension: 2200)
+                if Task.isCancelled { return }
+                await MainActor.run { [weak self] in
+                    guard let self, !self.isBusy, self.scanBufferID == bufID else { return }
+                    self.applyScanTrimRect(
+                        detected,
+                        previousTrim: previousTrim,
+                        bufferID: bufID,
+                        actionName: "Trim Empty Space",
+                        precomputedProxy: trimmedProxy
+                    )
+                }
+            }
+        }
+    }
+
+    private func applyPreviewCropWithUndo(
+        _ newCrop: NormalizedCropRect,
+        previousCrop: NormalizedCropRect,
+        bufferID: UUID,
+        actionName: String
+    ) {
+        guard !isBusy, previewBufferID == bufferID else { return }
+        cropRect = newCrop
+        statusText = newCrop.isFull ? "Selection reset to full flatbed" : "Trimmed selection to content"
+        isErrorStatus = false
+        broadcastSnapshot()
+
+        undoManager.registerUndo(withTarget: self) { target in
+            MainActor.assumeIsolated {
+                target.applyPreviewCropWithUndo(
+                    previousCrop,
+                    previousCrop: newCrop,
+                    bufferID: bufferID,
+                    actionName: actionName
+                )
+            }
+        }
+        undoManager.setActionName(actionName)
+    }
+
+    private func applyScanTrimRect(
+        _ newTrim: NormalizedCropRect,
+        previousTrim: NormalizedCropRect,
+        bufferID: UUID,
+        actionName: String,
+        precomputedProxy: RawImageBuffer? = nil
+    ) {
+        guard !isBusy, let scanBuf = rawScanBuffer, scanBufferID == bufferID else { return }
+        trimTask?.cancel()
+
+        undoManager.registerUndo(withTarget: self) { target in
+            MainActor.assumeIsolated {
+                target.applyScanTrimRect(
+                    previousTrim,
+                    previousTrim: newTrim,
+                    bufferID: bufferID,
+                    actionName: actionName
+                )
+            }
+        }
+        undoManager.setActionName(actionName)
+
+        scanTrimRect = newTrim
+        renderedFullScanImage = nil
+        fullScanRenderSignature = nil
+
+        let rotation = settings.rotation
+        let bounds = ImagePipeline.croppedPixelBounds(of: scanBuf, normalizedRect: newTrim)
+        let rotated = (rotation == .deg90 || rotation == .deg270)
+        let outW = rotated ? bounds.height : bounds.width
+        let outH = rotated ? bounds.width : bounds.height
+
+        if newTrim.isFull {
+            statusText = "Restored full scan (\(outW)×\(outH))"
+        } else {
+            statusText = "Trimmed empty space (\(outW)×\(outH)) — Export to save"
+        }
+        isErrorStatus = false
+
+        if let precomputedProxy {
+            rawScanProxyBuffer = precomputedProxy
+            broadcastSnapshot()
+            if viewMode == .scan {
+                reRenderActiveView()
+            }
+            return
+        }
+
+        broadcastSnapshot()
+        trimTask = Task.detached(priority: .userInitiated) { [weak self] in
+            let effective = newTrim.isFull ? scanBuf : ImagePipeline.cropRawBuffer(scanBuf, to: newTrim)
+            let proxy = ImagePipeline.makeProxyBuffer(from: effective, maxDimension: 2200)
+            if Task.isCancelled { return }
+            await MainActor.run { [weak self] in
+                guard let self, self.scanBufferID == bufferID, self.scanTrimRect == newTrim else { return }
+                self.rawScanProxyBuffer = proxy
+                if self.viewMode == .scan {
+                    self.reRenderActiveView()
+                }
+            }
+        }
     }
 
     func setViewMode(_ mode: CanvasViewMode) {
@@ -596,6 +773,7 @@ final class ScanSessionEngine {
                     try Task.checkCancellation()
 
                     self.rawPreviewBuffer = rawBuf
+                    self.previewBufferID = UUID()
                     self.platenAspectRatio = Double(rawBuf.width) / Double(max(1, rawBuf.height))
                     self.viewMode = .preview
                     self.isBusy = false
@@ -622,34 +800,62 @@ final class ScanSessionEngine {
                         baseName: capturedSettings.baseFilename,
                         ext: capturedSettings.outputFormat.fileExtension
                     )
-                    let sig = RenderSignature(
-                        rotation: capturedSettings.rotation,
-                        colorProfile: capturedSettings.colorProfile,
-                        toneAdjustments: capturedSettings.toneAdjustments
-                    )
+                    let shouldAutoTrim = capturedSettings.autoTrimEmptySpace
 
-                    let (rawBuf, proxyBuf, fullCG, fileSize) = try await Task.detached(priority: .userInitiated) {
+                    let (rawBuf, trimRect, proxyBuf, fullCG, fileSize) = try await Task.detached(priority: .userInitiated) {
                         let rawBuf = try ImagePipeline.decodeToRawBuffer(download: download, request: request)
+                        let trimRect: NormalizedCropRect
+                        if shouldAutoTrim, let detected = ImagePipeline.detectContentBounds(in: rawBuf) {
+                            trimRect = detected
+                        } else {
+                            trimRect = .full
+                        }
+                        let effectiveBuf = trimRect.isFull ? rawBuf : ImagePipeline.cropRawBuffer(rawBuf, to: trimRect)
                         let cgImg = try ImagePipeline.renderCGImage(
-                            from: rawBuf,
+                            from: effectiveBuf,
                             rotation: exportSettings.rotation,
                             colorProfile: exportSettings.colorProfile,
                             toneAdjustments: exportSettings.toneAdjustments
                         )
-                        try ImagePipeline.export(cgImage: cgImg, dpi: rawBuf.dpi, settings: exportSettings, to: destURL)
+                        try ImagePipeline.export(cgImage: cgImg, dpi: effectiveBuf.dpi, settings: exportSettings, to: destURL)
                         let attrs = try? FileManager.default.attributesOfItem(atPath: destURL.path)
                         let bytes = (attrs?[.size] as? Int64) ?? 0
-                        let proxy = ImagePipeline.makeProxyBuffer(from: rawBuf, maxDimension: 2200)
-                        return (rawBuf, proxy, cgImg, bytes)
+                        let proxy = ImagePipeline.makeProxyBuffer(from: effectiveBuf, maxDimension: 2200)
+                        return (rawBuf, trimRect, proxy, cgImg, bytes)
                     }.value
 
                     try Task.checkCancellation()
 
+                    let sig = RenderSignature(
+                        trimRect: trimRect,
+                        rotation: capturedSettings.rotation,
+                        colorProfile: capturedSettings.colorProfile,
+                        toneAdjustments: capturedSettings.toneAdjustments
+                    )
+                    let newScanID = UUID()
+                    self.trimTask?.cancel()
+                    self.undoManager.removeAllActions()
                     self.rawScanBuffer = rawBuf
+                    self.scanBufferID = newScanID
+                    self.scanTrimRect = trimRect
                     self.rawScanProxyBuffer = proxyBuf
                     self.renderedFullScanImage = fullCG
                     self.fullScanRenderSignature = sig
                     self.lastSavedURL = destURL
+
+                    if !trimRect.isFull {
+                        self.undoManager.registerUndo(withTarget: self) { target in
+                            MainActor.assumeIsolated {
+                                target.applyScanTrimRect(
+                                    .full,
+                                    previousTrim: trimRect,
+                                    bufferID: newScanID,
+                                    actionName: "Auto-Trim Empty Space"
+                                )
+                            }
+                        }
+                        self.undoManager.setActionName("Auto-Trim Empty Space")
+                    }
 
                     if capturedSettings.autoIncrement {
                         let nextName = FilenameHelper.incrementedFilename(capturedSettings.baseFilename)
@@ -662,7 +868,8 @@ final class ScanSessionEngine {
                     self.viewMode = .scan
                     let elapsed = CFAbsoluteTimeGetCurrent() - startTime
                     let mb = Double(fileSize) / (1024.0 * 1024.0)
-                    self.statusText = String(format: "Saved %@ (%dx%d · %.1f MB · %.1fs)", destURL.lastPathComponent, fullCG.width, fullCG.height, mb, elapsed)
+                    let trimTag = trimRect.isFull ? "" : "trimmed · "
+                    self.statusText = String(format: "Saved %@ (%@%dx%d · %.1f MB · %.1fs)", destURL.lastPathComponent, trimTag, fullCG.width, fullCG.height, mb, elapsed)
                     self.isErrorStatus = false
                     self.broadcastSnapshot()
                     self.emit(.scanCompleted(url: destURL, pixelWidth: fullCG.width, pixelHeight: fullCG.height, fileSizeBytes: fileSize, elapsedSeconds: elapsed))
@@ -705,7 +912,9 @@ final class ScanSessionEngine {
             ext: capturedSettings.outputFormat.fileExtension
         )
 
+        let trimRect = scanTrimRect
         let sig = RenderSignature(
+            trimRect: trimRect,
             rotation: capturedSettings.rotation,
             colorProfile: capturedSettings.colorProfile,
             toneAdjustments: capturedSettings.toneAdjustments
@@ -739,8 +948,9 @@ final class ScanSessionEngine {
                     if let cachedCG {
                         cgImg = cachedCG
                     } else {
+                        let effectiveBuf = trimRect.isFull ? rawBuf : ImagePipeline.cropRawBuffer(rawBuf, to: trimRect)
                         cgImg = try ImagePipeline.renderCGImage(
-                            from: rawBuf,
+                            from: effectiveBuf,
                             rotation: exportSettings.rotation,
                             colorProfile: exportSettings.colorProfile,
                             toneAdjustments: exportSettings.toneAdjustments
@@ -805,16 +1015,19 @@ final class ScanSessionEngine {
         }
 
         let captured = settings
+        let activeTrimRect = (viewMode == .scan) ? scanTrimRect : .full
         let simulateCompression = captured.previewCompressionEnabled && captured.outputFormat.supportsQuality
         let sig = RenderSignature(
+            trimRect: activeTrimRect,
             rotation: captured.rotation,
             colorProfile: captured.colorProfile,
             toneAdjustments: captured.toneAdjustments
         )
 
+        let fullBounds = ImagePipeline.croppedPixelBounds(of: fullBuf, normalizedRect: activeTrimRect)
         let trueRotatedSize: CGSize = (captured.rotation == .deg90 || captured.rotation == .deg270)
-            ? CGSize(width: fullBuf.height, height: fullBuf.width)
-            : CGSize(width: fullBuf.width, height: fullBuf.height)
+            ? CGSize(width: fullBounds.height, height: fullBounds.width)
+            : CGSize(width: fullBounds.width, height: fullBounds.height)
 
         activeImageGeneration &+= 1
         let gen = activeImageGeneration
@@ -846,7 +1059,7 @@ final class ScanSessionEngine {
                 let qPct = Int((captured.quality * 100).rounded())
                 summary = "Live: \(profileLabel) · \(captured.outputFormat.displayName) \(qPct)% (\(sizeText) est.)"
             } else {
-                let rawMB = Double(fullBuf.width * fullBuf.height * fullBuf.colorMode.bytesPerPixel) / (1024.0 * 1024.0)
+                let rawMB = Double(fullBounds.width * fullBounds.height * fullBuf.colorMode.bytesPerPixel) / (1024.0 * 1024.0)
                 let fmtSuffix = captured.outputFormat.supportsQuality
                     ? "\(captured.outputFormat.displayName) (compression preview off)"
                     : "\(captured.outputFormat.displayName) · ~\(Int(rawMB.rounded())) MB raw"
@@ -876,8 +1089,10 @@ final class ScanSessionEngine {
             fullScanRenderTask?.cancel()
             fullScanRenderTask = Task.detached(priority: .utility) { [weak self] in
                 if Task.isCancelled { return }
+                let effectiveBuf = activeTrimRect.isFull ? rawScan : ImagePipeline.cropRawBuffer(rawScan, to: activeTrimRect)
+                if Task.isCancelled { return }
                 guard let fullCG = try? ImagePipeline.renderCGImage(
-                    from: rawScan,
+                    from: effectiveBuf,
                     rotation: captured.rotation,
                     colorProfile: captured.colorProfile,
                     toneAdjustments: captured.toneAdjustments
@@ -936,10 +1151,12 @@ final class ScanSessionEngine {
         guard viewMode == .scan, let rawScan = rawScanBuffer else { return nil }
 
         let captured = settings
+        let trimRect = scanTrimRect
         let gen = activeImageGeneration
         let dpi = rawScan.dpi
         let summary = outputPreviewSummary
         let sig = RenderSignature(
+            trimRect: trimRect,
             rotation: captured.rotation,
             colorProfile: captured.colorProfile,
             toneAdjustments: captured.toneAdjustments
@@ -961,15 +1178,18 @@ final class ScanSessionEngine {
             let fullCG: CGImage
             if let existingFull {
                 fullCG = existingFull
-            } else if let rendered = try? ImagePipeline.renderCGImage(
-                from: rawScan,
-                rotation: captured.rotation,
-                colorProfile: captured.colorProfile,
-                toneAdjustments: captured.toneAdjustments
-            ) {
-                fullCG = rendered
             } else {
-                return nil
+                let effectiveBuf = trimRect.isFull ? rawScan : ImagePipeline.cropRawBuffer(rawScan, to: trimRect)
+                if let rendered = try? ImagePipeline.renderCGImage(
+                    from: effectiveBuf,
+                    rotation: captured.rotation,
+                    colorProfile: captured.colorProfile,
+                    toneAdjustments: captured.toneAdjustments
+                ) {
+                    fullCG = rendered
+                } else {
+                    return nil
+                }
             }
 
             guard let tile = ImagePipeline.cropAndEncodeTile(
@@ -1006,9 +1226,11 @@ final class ScanSessionEngine {
     ) async -> EncodedCompanionImage? {
         guard let rawScan = rawScanBuffer else { return nil }
         let captured = settings
+        let trimRect = scanTrimRect
         let gen = activeImageGeneration
         let dpi = rawScan.dpi
         let sig = RenderSignature(
+            trimRect: trimRect,
             rotation: captured.rotation,
             colorProfile: captured.colorProfile,
             toneAdjustments: captured.toneAdjustments
@@ -1020,15 +1242,18 @@ final class ScanSessionEngine {
             let fullCG: CGImage
             if let existingFull {
                 fullCG = existingFull
-            } else if let rendered = try? ImagePipeline.renderCGImage(
-                from: rawScan,
-                rotation: captured.rotation,
-                colorProfile: captured.colorProfile,
-                toneAdjustments: captured.toneAdjustments
-            ) {
-                fullCG = rendered
             } else {
-                return nil
+                let effectiveBuf = trimRect.isFull ? rawScan : ImagePipeline.cropRawBuffer(rawScan, to: trimRect)
+                if let rendered = try? ImagePipeline.renderCGImage(
+                    from: effectiveBuf,
+                    rotation: captured.rotation,
+                    colorProfile: captured.colorProfile,
+                    toneAdjustments: captured.toneAdjustments
+                ) {
+                    fullCG = rendered
+                } else {
+                    return nil
+                }
             }
 
             guard let data = ImagePipeline.encodeCompanionImage(
@@ -1057,11 +1282,16 @@ final class ScanSessionEngine {
     // MARK: - Testing Support (Seed buffers without needing a physical scanner)
 
     func loadSyntheticBuffersForTesting(preview: RawImageBuffer?, scan: RawImageBuffer?) {
+        self.trimTask?.cancel()
+        self.undoManager.removeAllActions()
         self.rawPreviewBuffer = preview
+        self.previewBufferID = UUID()
         if let preview {
             self.platenAspectRatio = Double(preview.width) / Double(max(1, preview.height))
         }
         self.rawScanBuffer = scan
+        self.scanBufferID = UUID()
+        self.scanTrimRect = .full
         if let scan {
             self.rawScanProxyBuffer = ImagePipeline.makeProxyBuffer(from: scan, maxDimension: 2200)
         } else {

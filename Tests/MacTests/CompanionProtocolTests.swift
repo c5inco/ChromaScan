@@ -15,12 +15,14 @@ final class CompanionProtocolTests: XCTestCase {
             .updateSettings(patch: ScanSettingsPatch(
                 resolution: 1200,
                 rotation: .deg90,
+                autoTrimEmptySpace: true,
                 colorProfile: .displayP3Convert,
                 outputFormat: .heic,
                 quality: 0.90,
                 toneAdjustments: ToneAdjustments(blackPoint: 0.05, whitePoint: 0.95, gamma: 1.1)
             )),
             .setCropRect(cropRect: NormalizedCropRect(x: 0.1, y: 0.2, width: 0.6, height: 0.5)),
+            .trimEmptySpace,
             .setViewMode(mode: .scan),
             .triggerPreview,
             .triggerScan,
@@ -79,7 +81,8 @@ final class CompanionProtocolTests: XCTestCase {
             activeImageGeneration: 3,
             scanPixelWidth: nil,
             scanPixelHeight: nil,
-            scanDPI: nil
+            scanDPI: nil,
+            isScanTrimmed: false
         )
 
         let info = CompanionImageReadyInfo(

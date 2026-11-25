@@ -51,9 +51,13 @@ final class ChromaScanRemoteTests: XCTestCase {
         let proxyCG = try XCTUnwrap(store.proxyImage?.cgImage)
         XCTAssertEqual(proxyCG.colorSpace?.name as String?, CGColorSpace.displayP3 as String)
 
-        // 3. Switch to scan mode & request 1:1 high-res tile -> tileImage decoded with Display P3 ICC profile
+        // 3. Switch to scan mode, test remote trim & request 1:1 high-res tile
         store.setViewMode(.scan)
         try await waitUntil(timeout: 2.0) { store.snapshot?.viewMode == .scan }
+
+        store.trimEmptySpace()
+        try await waitUntil(timeout: 2.0) { store.snapshot?.isScanTrimmed == true }
+        XCTAssertTrue(store.dimensionsReadout.contains("Trimmed"))
 
         store.requestHighResTile(
             normalizedRect: NormalizedCropRect(x: 0.2, y: 0.2, width: 0.3, height: 0.3),
@@ -168,6 +172,7 @@ private final class LoopbackMockMacHost {
     private var isBusy: Bool = false
     private var activeOperation: CompanionOperation?
     private var currentStatusText: String = "Ready"
+    private var isScanTrimmed: Bool = false
 
     init(pin: String) throws {
         self.pin = pin
@@ -275,6 +280,12 @@ private final class LoopbackMockMacHost {
             sendText(.snapshot(snapshot: makeSnapshot()), on: conn)
             sendSyntheticImage(kind: mode == .scan ? .scanProxy : .previewProxy, requestID: 0, normRect: nil, on: conn)
 
+        case .trimEmptySpace:
+            if currentViewMode == .scan {
+                isScanTrimmed = true
+            }
+            sendText(.snapshot(snapshot: makeSnapshot()), on: conn)
+
         case .requestTile(let requestID, let rect, _):
             sendSyntheticImage(kind: .highResTile, requestID: requestID, normRect: rect, on: conn)
 
@@ -351,9 +362,10 @@ private final class LoopbackMockMacHost {
             saveFolderDisplayName: "Pictures",
             outputPreviewSummary: "Live: Display P3 (Accurate)",
             activeImageGeneration: 1,
-            scanPixelWidth: 2400,
-            scanPixelHeight: 3200,
-            scanDPI: 600
+            scanPixelWidth: isScanTrimmed ? 1600 : 2400,
+            scanPixelHeight: isScanTrimmed ? 2100 : 3200,
+            scanDPI: 600,
+            isScanTrimmed: isScanTrimmed
         )
     }
 

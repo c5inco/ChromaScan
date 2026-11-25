@@ -3,6 +3,7 @@ import AppKit
 /// Native bottom status bar displaying crop/zoom controls, dimensions, live progress, and cancel/reveal actions.
 @MainActor
 final class StatusFooterView: NSView {
+    var onTrimEmptySpace: (() -> Void)?
     var onResetCrop: (() -> Void)?
     var onCancel: (() -> Void)?
     var onRevealLastSaved: (() -> Void)?
@@ -11,6 +12,7 @@ final class StatusFooterView: NSView {
     var onZoomFit: (() -> Void)?
     var onZoomActualSize: (() -> Void)?
 
+    private let trimEmptySpaceButton = NSButton(title: "Trim Space", target: nil, action: nil)
     private let fullPageButton = NSButton(title: "Full Page", target: nil, action: nil)
     private let dimensionsLabel = NSTextField(labelWithString: "")
 
@@ -50,6 +52,15 @@ final class StatusFooterView: NSView {
         separator.boxType = .separator
         separator.translatesAutoresizingMaskIntoConstraints = false
         addSubview(separator)
+
+        trimEmptySpaceButton.bezelStyle = .rounded
+        trimEmptySpaceButton.controlSize = .small
+        trimEmptySpaceButton.image = NSImage(systemSymbolName: "crop", accessibilityDescription: "Trim Empty Space")
+        trimEmptySpaceButton.imagePosition = .imageLeading
+        trimEmptySpaceButton.toolTip = "Auto-detect and trim empty space (⇧⌘T)"
+        trimEmptySpaceButton.target = self
+        trimEmptySpaceButton.action = #selector(trimEmptySpaceClicked)
+        trimEmptySpaceButton.isHidden = true
 
         fullPageButton.bezelStyle = .rounded
         fullPageButton.controlSize = .small
@@ -124,7 +135,7 @@ final class StatusFooterView: NSView {
         zoomStack.spacing = 4
         zoomStack.alignment = .centerY
 
-        let leftStack = NSStackView(views: [zoomStack, zoomDivider, fullPageButton, dimensionsLabel])
+        let leftStack = NSStackView(views: [zoomStack, zoomDivider, trimEmptySpaceButton, fullPageButton, dimensionsLabel])
         leftStack.orientation = .horizontal
         leftStack.spacing = 8
         leftStack.alignment = .centerY
@@ -171,8 +182,23 @@ final class StatusFooterView: NSView {
         zoomFitButton.title = isFit ? "Fit (\(pct)%)" : "\(pct)%"
     }
 
-    func setCropResetVisible(_ visible: Bool) {
-        fullPageButton.isHidden = !visible
+    func updateTrimControls(
+        showingScan: Bool,
+        hasImage: Bool,
+        isCropFull: Bool,
+        isScanTrimmed: Bool,
+        isBusy: Bool
+    ) {
+        if showingScan {
+            trimEmptySpaceButton.isHidden = !hasImage
+            trimEmptySpaceButton.isEnabled = hasImage && !isBusy && !isScanTrimmed
+            fullPageButton.isHidden = true
+        } else {
+            trimEmptySpaceButton.isHidden = !hasImage
+            trimEmptySpaceButton.isEnabled = hasImage && !isBusy
+            fullPageButton.isHidden = false
+            fullPageButton.isEnabled = !isCropFull && !isBusy
+        }
     }
 
     func updateDimensions(
@@ -183,7 +209,6 @@ final class StatusFooterView: NSView {
         estimatedRawBytes: Int64,
         isFullPage: Bool
     ) {
-        fullPageButton.isEnabled = !isFullPage
         let mb = Double(estimatedRawBytes) / (1024.0 * 1024.0)
         let sizeStr = mb >= 10.0 ? String(format: "%.0f MB", mb) : String(format: "%.1f MB", mb)
         let nf = NumberFormatter()
@@ -193,12 +218,13 @@ final class StatusFooterView: NSView {
         dimensionsLabel.stringValue = String(format: "%.2f\"×%.2f\" · %@×%@ (%@ raw)", widthInches, heightInches, pw, ph, sizeStr)
     }
 
-    func updateScanDimensions(pixelWidth: Int, pixelHeight: Int, dpi: Int, profileName: String) {
+    func updateScanDimensions(pixelWidth: Int, pixelHeight: Int, dpi: Int, profileName: String, isTrimmed: Bool = false) {
         let nf = NumberFormatter()
         nf.numberStyle = .decimal
         let pw = nf.string(from: NSNumber(value: pixelWidth)) ?? "\(pixelWidth)"
         let ph = nf.string(from: NSNumber(value: pixelHeight)) ?? "\(pixelHeight)"
-        dimensionsLabel.stringValue = "\(pw)×\(ph) px · \(dpi) DPI · \(profileName)"
+        let trimSuffix = isTrimmed ? " · Trimmed" : ""
+        dimensionsLabel.stringValue = "\(pw)×\(ph) px · \(dpi) DPI · \(profileName)\(trimSuffix)"
     }
 
     func setIdle(status: String, showReveal: Bool) {
@@ -234,6 +260,7 @@ final class StatusFooterView: NSView {
         }
     }
 
+    @objc private func trimEmptySpaceClicked() { onTrimEmptySpace?() }
     @objc private func resetCropClicked() { onResetCrop?() }
     @objc private func cancelClicked() { onCancel?() }
     @objc private func revealClicked() { onRevealLastSaved?() }

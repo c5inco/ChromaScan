@@ -16,6 +16,7 @@ final class InspectorViewController: NSViewController, NSTextFieldDelegate {
     private let intentPopup = NSPopUpButton()
     private let transferPopup = NSPopUpButton()
     private let rotateSegment = NSSegmentedControl()
+    private let autoTrimCheck = NSButton(checkboxWithTitle: "Auto-trim empty space on scan", target: nil, action: nil)
 
     // Hardware tone controls
     private let brightnessSlider = NSSlider()
@@ -141,6 +142,13 @@ final class InspectorViewController: NSViewController, NSTextFieldDelegate {
         ])
         stack.addArrangedSubview(grid)
         grid.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28).isActive = true
+
+        autoTrimCheck.controlSize = .small
+        autoTrimCheck.font = NSFont.systemFont(ofSize: 11.5)
+        autoTrimCheck.toolTip = "Automatically detect and crop blank flatbed margins when scanning"
+        autoTrimCheck.target = self
+        autoTrimCheck.action = #selector(autoTrimChanged)
+        stack.addArrangedSubview(autoTrimCheck)
     }
 
     private func buildHardwareToneSection(into stack: NSStackView) {
@@ -322,6 +330,7 @@ final class InspectorViewController: NSViewController, NSTextFieldDelegate {
         if let rotIdx = ScanRotation.allCases.firstIndex(of: settings.rotation) {
             rotateSegment.selectedSegment = rotIdx
         }
+        autoTrimCheck.state = settings.autoTrimEmptySpace ? .on : .off
 
         if let br = caps?.brightnessRange {
             brightnessSlider.minValue = Double(br.min)
@@ -370,6 +379,7 @@ final class InspectorViewController: NSViewController, NSTextFieldDelegate {
         colorModePopup.isEnabled = enabled
         intentPopup.isEnabled = enabled
         transferPopup.isEnabled = enabled
+        autoTrimCheck.isEnabled = enabled
         brightnessSlider.isEnabled = enabled && caps?.brightnessRange != nil
         contrastSlider.isEnabled = enabled && caps?.contrastRange != nil
         hardwareResetButton.isEnabled = enabled && (caps?.brightnessRange != nil || caps?.contrastRange != nil)
@@ -486,6 +496,11 @@ final class InspectorViewController: NSViewController, NSTextFieldDelegate {
         let idx = rotateSegment.selectedSegment
         guard idx >= 0 && idx < ScanRotation.allCases.count else { return }
         engine.updateSettings(ScanSettingsPatch(rotation: ScanRotation.allCases[idx]))
+    }
+
+    @objc private func autoTrimChanged() {
+        guard !isApplyingSnapshot else { return }
+        engine.updateSettings(ScanSettingsPatch(autoTrimEmptySpace: autoTrimCheck.state == .on))
     }
 
     @objc private func hardwareToneChanged() {

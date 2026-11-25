@@ -24,6 +24,7 @@ final class AppPreferences {
         static let intent = "scan.intent"
         static let transferFormat = "scan.transferFormat"
         static let rotation = "scan.rotation"
+        static let autoTrimEmptySpace = "scan.autoTrimEmptySpace"
         static let colorProfile = "output.colorProfile"
         static let outputFormat = "output.format"
         static let quality = "output.quality"
@@ -63,6 +64,11 @@ final class AppPreferences {
     var rotation: ScanRotation {
         get { ScanRotation(rawValue: defaults.integer(forKey: Key.rotation)) ?? .deg0 }
         set { defaults.set(newValue.rawValue, forKey: Key.rotation) }
+    }
+
+    var autoTrimEmptySpace: Bool {
+        get { defaults.bool(forKey: Key.autoTrimEmptySpace) }
+        set { defaults.set(newValue, forKey: Key.autoTrimEmptySpace) }
     }
 
     var colorProfile: ColorProfileMode {

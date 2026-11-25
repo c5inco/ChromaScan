@@ -374,6 +374,7 @@ struct ScanSessionSettings: Codable, Equatable, Sendable {
     var intent: ScanIntent = .photo
     var transferFormat: TransferFormat = .rawOctetStream
     var rotation: ScanRotation = .deg0
+    var autoTrimEmptySpace: Bool = false
     var hardwareBrightness: Int = 1000
     var hardwareContrast: Int = 1000
     var colorProfile: ColorProfileMode = .displayP3Convert
@@ -392,6 +393,7 @@ struct ScanSettingsPatch: Codable, Equatable, Sendable {
     var intent: ScanIntent?
     var transferFormat: TransferFormat?
     var rotation: ScanRotation?
+    var autoTrimEmptySpace: Bool?
     var hardwareBrightness: Int?
     var hardwareContrast: Int?
     var resetHardwareTone: Bool?
@@ -411,6 +413,7 @@ struct ScanSettingsPatch: Codable, Equatable, Sendable {
         intent: ScanIntent? = nil,
         transferFormat: TransferFormat? = nil,
         rotation: ScanRotation? = nil,
+        autoTrimEmptySpace: Bool? = nil,
         hardwareBrightness: Int? = nil,
         hardwareContrast: Int? = nil,
         resetHardwareTone: Bool? = nil,
@@ -429,6 +432,7 @@ struct ScanSettingsPatch: Codable, Equatable, Sendable {
         self.intent = intent
         self.transferFormat = transferFormat
         self.rotation = rotation
+        self.autoTrimEmptySpace = autoTrimEmptySpace
         self.hardwareBrightness = hardwareBrightness
         self.hardwareContrast = hardwareContrast
         self.resetHardwareTone = resetHardwareTone

@@ -47,6 +47,7 @@ final class MockESCLClient: ESCLClientProtocol, @unchecked Sendable {
     var status = ScannerStatus(state: "Idle", adfState: nil)
     var scanDelayNanoseconds: UInt64 = 0
     var progressChunks = 3
+    var syntheticWhiteMarginFraction: Double = 0.0
     var lastScanRequest: ScanJobRequest?
     var wasCancelled = false
 
@@ -116,12 +117,26 @@ final class MockESCLClient: ESCLClientProtocol, @unchecked Sendable {
         }
 
         var data = Data(count: total)
+        let margin = syntheticWhiteMarginFraction
         data.withUnsafeMutableBytes { raw in
             let ptr = raw.bindMemory(to: UInt8.self).baseAddress!
+            let minX = Int(Double(w) * margin)
+            let maxX = w - minX
+            let minY = Int(Double(h) * margin)
+            let maxY = h - minY
             for y in 0..<h {
                 for x in 0..<w {
                     let off = (y * w + x) * bpp
-                    if bpp == 3 {
+                    let isBorder = margin > 0 && (x < minX || x >= maxX || y < minY || y >= maxY)
+                    if isBorder {
+                        if bpp == 3 {
+                            ptr[off] = 248
+                            ptr[off + 1] = 248
+                            ptr[off + 2] = 246
+                        } else {
+                            ptr[off] = 248
+                        }
+                    } else if bpp == 3 {
                         ptr[off] = UInt8((x * 255) / max(1, w - 1))
                         ptr[off + 1] = UInt8((y * 255) / max(1, h - 1))
                         ptr[off + 2] = 160
@@ -264,6 +279,98 @@ final class ScanSessionEngineTests: XCTestCase {
         XCTAssertEqual(engine.statusText, "Scan cancelled")
         XCTAssertNil(engine.lastSavedURL)
         XCTAssertTrue(client.wasCancelled)
+    }
+
+    func testAutoTrimOnScanManualTrimAndRestoreFull() async throws {
+        let client = MockESCLClient()
+        client.syntheticWhiteMarginFraction = 0.20
+        let (engine, browser, _, tmpDir) = makeIsolatedEngine(client: client)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let scanner = DiscoveredScanner(
+            id: "mock-hp",
+            name: "Mock HP 3830",
+            host: "mock.local",
+            port: 8080,
+            useTLS: false,
+            rootPath: "eSCL",
+            modelName: "Mock HP 3830",
+            uuid: "mock-hp"
+        )
+        engine.startDiscovery()
+        browser.emit([scanner])
+        try await waitUntil(timeout: 2.0) { engine.capabilities != nil }
+
+        // 1. Preview + manual Trim Empty Space snaps marquee tightly around content and supports Cmd+Z undo/redo
+        engine.startPreview()
+        try await waitUntil(timeout: 3.0) { !engine.isBusy && engine.rawPreviewBuffer != nil }
+        XCTAssertTrue(engine.cropRect.isFull)
+
+        engine.trimEmptySpace()
+        try await waitUntil(timeout: 2.0) { !engine.cropRect.isFull }
+        XCTAssertEqual(engine.cropRect.x, 0.20, accuracy: 0.03)
+        XCTAssertEqual(engine.cropRect.y, 0.20, accuracy: 0.03)
+        XCTAssertEqual(engine.cropRect.width, 0.60, accuracy: 0.04)
+        XCTAssertEqual(engine.cropRect.height, 0.60, accuracy: 0.04)
+        XCTAssertTrue(engine.undoManager.canUndo)
+
+        engine.undo()
+        XCTAssertTrue(engine.cropRect.isFull)
+        XCTAssertTrue(engine.undoManager.canRedo)
+
+        engine.redo()
+        XCTAssertFalse(engine.cropRect.isFull)
+
+        // Reset marquee to full page, enable Auto-Trim on scan, and run a scan
+        engine.resetCrop()
+        engine.updateSettings(ScanSettingsPatch(autoTrimEmptySpace: true))
+        XCTAssertTrue(engine.settings.autoTrimEmptySpace)
+        XCTAssertTrue(engine.preferences.autoTrimEmptySpace)
+
+        engine.startScan()
+        try await waitUntil(timeout: 3.0) { !engine.isBusy && engine.lastSavedURL != nil && engine.viewMode == .scan }
+        XCTAssertTrue(engine.isScanTrimmed)
+        XCTAssertTrue(engine.undoManager.canUndo)
+
+        let rawScan = try XCTUnwrap(engine.rawScanBuffer)
+        let savedURL = try XCTUnwrap(engine.lastSavedURL)
+        let trimmedSrc = try XCTUnwrap(CGImageSourceCreateWithURL(savedURL as CFURL, nil))
+        let trimmedCG = try XCTUnwrap(CGImageSourceCreateImageAtIndex(trimmedSrc, 0, nil))
+        XCTAssertLessThan(trimmedCG.width, rawScan.width)
+        XCTAssertLessThan(trimmedCG.height, rawScan.height)
+        let snapTrimmed = engine.makeSnapshot()
+        XCTAssertTrue(snapTrimmed.isScanTrimmed)
+        XCTAssertEqual(snapTrimmed.scanPixelWidth, trimmedCG.width)
+        XCTAssertEqual(snapTrimmed.scanPixelHeight, trimmedCG.height)
+
+        // 2. Undo (Cmd+Z) restores full scan non-destructively and re-export writes full dimensions
+        engine.undo()
+        XCTAssertFalse(engine.isScanTrimmed)
+        XCTAssertTrue(engine.undoManager.canRedo)
+        let snapRestored = engine.makeSnapshot()
+        XCTAssertEqual(snapRestored.scanPixelWidth, rawScan.width)
+        XCTAssertEqual(snapRestored.scanPixelHeight, rawScan.height)
+
+        engine.exportCurrentScan()
+        try await waitUntil(timeout: 3.0) { !engine.isBusy && engine.lastSavedURL?.lastPathComponent == "artwork-002.tiff" }
+        let restoredURL = try XCTUnwrap(engine.lastSavedURL)
+        let restoredSrc = try XCTUnwrap(CGImageSourceCreateWithURL(restoredURL as CFURL, nil))
+        let restoredCG = try XCTUnwrap(CGImageSourceCreateImageAtIndex(restoredSrc, 0, nil))
+        XCTAssertEqual(restoredCG.width, rawScan.width)
+        XCTAssertEqual(restoredCG.height, rawScan.height)
+
+        // 3. Redo (Shift+Cmd+Z) re-applies trim cleanly, and manual Trim after undo works too
+        engine.redo()
+        XCTAssertTrue(engine.isScanTrimmed)
+        XCTAssertEqual(engine.makeSnapshot().scanPixelWidth, trimmedCG.width)
+        XCTAssertEqual(engine.makeSnapshot().scanPixelHeight, trimmedCG.height)
+
+        engine.undo()
+        XCTAssertFalse(engine.isScanTrimmed)
+        engine.trimEmptySpace()
+        try await waitUntil(timeout: 2.0) { engine.isScanTrimmed }
+        XCTAssertEqual(engine.makeSnapshot().scanPixelWidth, trimmedCG.width)
+        XCTAssertEqual(engine.makeSnapshot().scanPixelHeight, trimmedCG.height)
     }
 
     private func waitUntil(timeout: TimeInterval, condition: @escaping @MainActor () -> Bool) async throws {

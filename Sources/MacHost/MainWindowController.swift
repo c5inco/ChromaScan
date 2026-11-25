@@ -2,7 +2,7 @@ import AppKit
 import UniformTypeIdentifiers
 
 @MainActor
-final class MainWindowController: NSWindowController, NSToolbarDelegate {
+final class MainWindowController: NSWindowController, NSToolbarDelegate, NSMenuItemValidation {
 
     private let engine: ScanSessionEngine
     private let companionServer: CompanionServer
@@ -128,6 +128,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
 
         canvasVC.canvasView.onViewportSettled = { [weak self] in
             self?.refreshHighResOverlayTile()
+        }
+
+        canvasVC.footerView.onTrimEmptySpace = { [weak self] in
+            self?.trimEmptySpaceClicked()
         }
 
         canvasVC.footerView.onResetCrop = { [weak self] in
@@ -339,7 +343,6 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
 
         let showingScan = (snapshot.viewMode == .scan && snapshot.hasScanImage)
         canvasVC.canvasView.showCropOverlay = !showingScan
-        canvasVC.footerView.setCropResetVisible(!showingScan)
 
         if showingScan {
             canvasVC.canvasView.emptyStateTitle = "No Scan Yet"
@@ -350,6 +353,13 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         }
 
         let hasImageForMode = showingScan ? snapshot.hasScanImage : snapshot.hasPreviewImage
+        canvasVC.footerView.updateTrimControls(
+            showingScan: showingScan,
+            hasImage: hasImageForMode,
+            isCropFull: snapshot.cropRect.isFull,
+            isScanTrimmed: snapshot.isScanTrimmed,
+            isBusy: snapshot.isBusy
+        )
         if !hasImageForMode {
             canvasVC.canvasView.previewImage = nil
             canvasVC.canvasView.truePixelSize = .zero
@@ -455,6 +465,41 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
 
     @objc func resetCrop() {
         engine.resetCrop()
+    }
+
+    @objc func trimEmptySpaceClicked() {
+        if window?.firstResponder is NSTextView {
+            window?.makeFirstResponder(canvasVC.canvasView)
+        }
+        engine.trimEmptySpace()
+    }
+
+    @objc func undo(_ sender: Any?) {
+        engine.undo()
+    }
+
+    @objc func redo(_ sender: Any?) {
+        engine.redo()
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(undo(_:)):
+            menuItem.title = engine.undoManager.undoMenuItemTitle
+            return engine.undoManager.canUndo && !engine.isBusy
+        case #selector(redo(_:)):
+            menuItem.title = engine.undoManager.redoMenuItemTitle
+            return engine.undoManager.canRedo && !engine.isBusy
+        case #selector(trimEmptySpaceClicked):
+            guard !engine.isBusy else { return false }
+            return engine.viewMode == .scan
+                ? (engine.rawScanBuffer != nil && !engine.isScanTrimmed)
+                : (engine.rawPreviewBuffer != nil)
+        case #selector(resetCrop):
+            return !engine.isBusy && engine.viewMode == .preview && !engine.cropRect.isFull
+        default:
+            return true
+        }
     }
 
     @objc func zoomInClicked() {
@@ -619,7 +664,13 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
            let dpi = snapshot.scanDPI {
             let isGray = engine.rawScanBuffer?.colorMode == .grayscale8
             let profile = isGray ? "Grayscale" : snapshot.settings.colorProfile.shortName
-            canvasVC.footerView.updateScanDimensions(pixelWidth: w, pixelHeight: h, dpi: dpi, profileName: profile)
+            canvasVC.footerView.updateScanDimensions(
+                pixelWidth: w,
+                pixelHeight: h,
+                dpi: dpi,
+                profileName: profile,
+                isTrimmed: snapshot.isScanTrimmed
+            )
             return
         }
 

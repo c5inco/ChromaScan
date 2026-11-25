@@ -223,4 +223,118 @@ final class ChromaScanTests: XCTestCase {
         XCTAssertTrue(area.options.contains(.mouseEnteredAndExited))
         XCTAssertTrue(area.options.contains(.cursorUpdate))
     }
+
+    func testDetectContentBoundsAndCropRawBuffer() throws {
+        // 1. Centered artwork on warm cream flatbed lid border (246, 242, 234)
+        let w = 200, h = 240
+        var centered = Data(count: w * h * 3)
+        for y in 0..<h {
+            for x in 0..<w {
+                let off = (y * w + x) * 3
+                let inArt = x >= 30 && x < 170 && y >= 40 && y < 200
+                if inArt {
+                    centered[off] = 40
+                    centered[off + 1] = 110
+                    centered[off + 2] = 190
+                } else {
+                    centered[off] = 246
+                    centered[off + 1] = 242
+                    centered[off + 2] = 234
+                }
+            }
+        }
+        let centeredBuf = RawImageBuffer(data: centered, width: w, height: h, bytesPerRow: w * 3, colorMode: .rgb24, dpi: 300)
+        let centeredRect = try XCTUnwrap(ImagePipeline.detectContentBounds(in: centeredBuf))
+        XCTAssertEqual(centeredRect.x, 30.0 / 200.0, accuracy: 0.02)
+        XCTAssertEqual(centeredRect.y, 40.0 / 240.0, accuracy: 0.02)
+        XCTAssertEqual(centeredRect.width, 140.0 / 200.0, accuracy: 0.025)
+        XCTAssertEqual(centeredRect.height, 160.0 / 240.0, accuracy: 0.025)
+
+        let cropped = ImagePipeline.cropRawBuffer(centeredBuf, to: centeredRect)
+        XCTAssertLessThan(cropped.width, w)
+        XCTAssertLessThan(cropped.height, h)
+        XCTAssertGreaterThanOrEqual(cropped.width, 138)
+        XCTAssertGreaterThanOrEqual(cropped.height, 158)
+        XCTAssertEqual(cropped.dpi, 300)
+        XCTAssertEqual(cropped.data.count, cropped.width * cropped.height * 3)
+
+        // 2. Photo aligned flush to top-left flatbed corner (0..110, 0..140) on white lid
+        var topLeft = Data(repeating: 250, count: w * h * 3)
+        for y in 0..<140 {
+            for x in 0..<110 {
+                let off = (y * w + x) * 3
+                topLeft[off] = 210
+                topLeft[off + 1] = 70
+                topLeft[off + 2] = 55
+            }
+        }
+        let topLeftBuf = RawImageBuffer(data: topLeft, width: w, height: h, bytesPerRow: w * 3, colorMode: .rgb24, dpi: 600)
+        let topLeftRect = try XCTUnwrap(ImagePipeline.detectContentBounds(in: topLeftBuf))
+        XCTAssertEqual(topLeftRect.x, 0.0, accuracy: 0.001)
+        XCTAssertEqual(topLeftRect.y, 0.0, accuracy: 0.001)
+        XCTAssertEqual(topLeftRect.width, 110.0 / 200.0, accuracy: 0.02)
+        XCTAssertEqual(topLeftRect.height, 140.0 / 240.0, accuracy: 0.02)
+
+        // 3. Grayscale8 document with white margins + isolated 1px dust speck (should ignore dust)
+        var gray = Data(repeating: 248, count: w * h)
+        for y in 60..<180 {
+            for x in 50..<150 {
+                gray[y * w + x] = 35
+            }
+        }
+        gray[10 * w + 10] = 20 // isolated 1px dust speck in empty margin
+        let grayBuf = RawImageBuffer(data: gray, width: w, height: h, bytesPerRow: w, colorMode: .grayscale8, dpi: 300)
+        let grayRect = try XCTUnwrap(ImagePipeline.detectContentBounds(in: grayBuf))
+        XCTAssertEqual(grayRect.x, 50.0 / 200.0, accuracy: 0.02)
+        XCTAssertEqual(grayRect.y, 60.0 / 240.0, accuracy: 0.02)
+        XCTAssertEqual(grayRect.width, 100.0 / 200.0, accuracy: 0.025)
+        XCTAssertEqual(grayRect.height, 120.0 / 240.0, accuracy: 0.025)
+
+        // 4. Full-bleed dark/colorful image (no empty border) -> nil
+        let fullBleed = RawImageBuffer(data: Data(repeating: 80, count: w * h * 3), width: w, height: h, bytesPerRow: w * 3, colorMode: .rgb24, dpi: 300)
+        XCTAssertNil(ImagePipeline.detectContentBounds(in: fullBleed))
+
+        // 5. Completely blank white flatbed -> nil (must not collapse to tiny rect)
+        let blank = RawImageBuffer(data: Data(repeating: 252, count: w * h * 3), width: w, height: h, bytesPerRow: w * 3, colorMode: .rgb24, dpi: 300)
+        XCTAssertNil(ImagePipeline.detectContentBounds(in: blank))
+
+        // 6. Real flatbed scan with thick dark bottom/right mechanical bezel (~1.2%) + 3x2 dust speck in white lid
+        let fw = 523, fh = 720
+        var flatbed = Data(repeating: 253, count: fw * fh * 3)
+        // Book page flush to top-left: 0..<491, 0..<622
+        for y in 0..<622 {
+            for x in 0..<491 {
+                let off = (y * fw + x) * 3
+                flatbed[off] = 130
+                flatbed[off + 1] = 118
+                flatbed[off + 2] = 106
+            }
+        }
+        // 3x2 dark dust speck on glass inside white bottom margin at y=666..667, x=44..46
+        for y in 666...667 {
+            for x in 44...46 {
+                let off = (y * fw + x) * 3
+                flatbed[off] = 130; flatbed[off + 1] = 130; flatbed[off + 2] = 130
+            }
+        }
+        // 8px dark mechanical bottom bezel (y=712..<720) & 2px right bezel (x=521..<523)
+        for y in 712..<fh {
+            for x in 0..<fw {
+                let off = (y * fw + x) * 3
+                flatbed[off] = 40; flatbed[off + 1] = 40; flatbed[off + 2] = 40
+            }
+        }
+        for y in 0..<fh {
+            for x in 521..<fw {
+                let off = (y * fw + x) * 3
+                flatbed[off] = 35; flatbed[off + 1] = 35; flatbed[off + 2] = 35
+            }
+        }
+        let flatbedBuf = RawImageBuffer(data: flatbed, width: fw, height: fh, bytesPerRow: fw * 3, colorMode: .rgb24, dpi: 1200)
+        let flatbedRect = try XCTUnwrap(ImagePipeline.detectContentBounds(in: flatbedBuf))
+        XCTAssertEqual(flatbedRect.x, 0.0, accuracy: 0.002)
+        XCTAssertEqual(flatbedRect.y, 0.0, accuracy: 0.002)
+        XCTAssertEqual(flatbedRect.width, 491.0 / 523.0, accuracy: 0.01)
+        XCTAssertEqual(flatbedRect.height, 622.0 / 720.0, accuracy: 0.01)
+    }
 }

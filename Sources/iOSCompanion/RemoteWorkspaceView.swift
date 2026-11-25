@@ -140,7 +140,7 @@ struct RemoteWorkspaceView: View {
                     emptyCanvasView(showingScan: showingScan, snap: snap)
                 }
 
-                // Floating centered top summary pill, Full Page reset & bottom toast
+                // Floating centered top summary pill, Trim / Full Page actions & bottom toast
                 VStack(spacing: 6) {
                     if !snap.outputPreviewSummary.isEmpty, store.proxyImage != nil {
                         Text(snap.outputPreviewSummary)
@@ -155,17 +155,33 @@ struct RemoteWorkspaceView: View {
                             .allowsHitTesting(false)
                     }
 
-                    if !showingScan && !snap.cropRect.isFull && store.proxyImage != nil {
-                        Button {
-                            store.resetCrop()
-                        } label: {
-                            Label("Full Page", systemImage: "arrow.uturn.backward")
-                                .font(.caption.weight(.semibold))
+                    if store.proxyImage != nil {
+                        HStack(spacing: 8) {
+                            Button {
+                                store.trimEmptySpace()
+                            } label: {
+                                Label("Trim", systemImage: "crop")
+                                    .font(.caption.weight(.semibold))
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.mini)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .disabled(snap.isBusy || (showingScan && snap.isScanTrimmed))
+
+                            if !showingScan && !snap.cropRect.isFull {
+                                Button {
+                                    store.resetCrop()
+                                } label: {
+                                    Label("Full Page", systemImage: "arrow.uturn.backward")
+                                        .font(.caption.weight(.semibold))
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.mini)
+                                .background(.ultraThinMaterial, in: Capsule())
+                                .disabled(snap.isBusy)
+                                .transition(.opacity.combined(with: .scale(scale: 0.92)))
+                            }
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.mini)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .transition(.opacity.combined(with: .scale(scale: 0.92)))
                     }
 
                     Spacer()

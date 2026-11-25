@@ -694,4 +694,383 @@ enum ImagePipeline {
         )
         return (encoded, targetImage.width, targetImage.height, exactNorm)
     }
+
+    // MARK: - Auto-Trim Empty Space (Border Detection & Pixel Crop)
+
+    /// Returns the exact pixel dimensions produced by cropping `raw` to `normalizedRect`.
+    static func croppedPixelBounds(
+        of raw: RawImageBuffer,
+        normalizedRect: NormalizedCropRect
+    ) -> (x: Int, y: Int, width: Int, height: Int) {
+        if normalizedRect.isFull {
+            return (0, 0, raw.width, raw.height)
+        }
+        let c = normalizedRect.clamped(minSize: 0.01)
+        let pxX = max(0, min(raw.width - 1, Int((c.x * Double(raw.width)).rounded(.down))))
+        let pxY = max(0, min(raw.height - 1, Int((c.y * Double(raw.height)).rounded(.down))))
+        let pxMaxX = min(raw.width, max(pxX + 1, Int(((c.x + c.width) * Double(raw.width)).rounded(.up))))
+        let pxMaxY = min(raw.height, max(pxY + 1, Int(((c.y + c.height) * Double(raw.height)).rounded(.up))))
+        return (pxX, pxY, max(1, pxMaxX - pxX), max(1, pxMaxY - pxY))
+    }
+
+    /// Crops `raw` to `normalizedRect` in physical buffer coordinates, returning a tightly packed `RawImageBuffer`.
+    static func cropRawBuffer(_ raw: RawImageBuffer, to normalizedRect: NormalizedCropRect) -> RawImageBuffer {
+        if normalizedRect.isFull { return raw }
+        let b = croppedPixelBounds(of: raw, normalizedRect: normalizedRect)
+        if b.x == 0 && b.y == 0 && b.width == raw.width && b.height == raw.height {
+            return raw
+        }
+
+        let bpp = raw.colorMode.bytesPerPixel
+        let dstRowBytes = b.width * bpp
+        let srcRowBytes = raw.bytesPerRow
+        var dstData = Data(count: dstRowBytes * b.height)
+
+        raw.data.withUnsafeBytes { srcRaw in
+            dstData.withUnsafeMutableBytes { dstRaw in
+                let srcBox = UncheckedReadPtr(base: srcRaw.bindMemory(to: UInt8.self).baseAddress!)
+                let dstBox = UncheckedWritePtr(base: dstRaw.bindMemory(to: UInt8.self).baseAddress!)
+                let xByteOffset = b.x * bpp
+                let startY = b.y
+                if b.height >= 256 {
+                    DispatchQueue.concurrentPerform(iterations: b.height) { dy in
+                        let srcPtr = srcBox.base + (startY + dy) * srcRowBytes + xByteOffset
+                        let dstPtr = dstBox.base + dy * dstRowBytes
+                        memcpy(dstPtr, srcPtr, dstRowBytes)
+                    }
+                } else {
+                    for dy in 0..<b.height {
+                        let srcPtr = srcBox.base + (startY + dy) * srcRowBytes + xByteOffset
+                        let dstPtr = dstBox.base + dy * dstRowBytes
+                        memcpy(dstPtr, srcPtr, dstRowBytes)
+                    }
+                }
+            }
+        }
+
+        return RawImageBuffer(
+            data: dstData,
+            width: b.width,
+            height: b.height,
+            bytesPerRow: dstRowBytes,
+            colorMode: raw.colorMode,
+            dpi: raw.dpi
+        )
+    }
+
+    /// Detects the bounding box of non-empty content inside a flatbed/document scan buffer,
+    /// returning a normalized crop rect in physical buffer coordinates (`nil` if no meaningful empty border is found).
+    static func detectContentBounds(
+        in raw: RawImageBuffer,
+        paddingFraction: Double = 0.001
+    ) -> NormalizedCropRect? {
+        guard raw.width >= 16, raw.height >= 16 else { return nil }
+
+        let analysis = (max(raw.width, raw.height) > 720)
+            ? makeProxyBuffer(from: raw, maxDimension: 720)
+            : raw
+
+        let w = analysis.width
+        let h = analysis.height
+        let bpp = analysis.colorMode.bytesPerPixel
+        let rowBytes = analysis.bytesPerRow
+        guard w >= 16, h >= 16 else { return nil }
+
+        return analysis.data.withUnsafeBytes { rawBytes -> NormalizedCropRect? in
+            guard let ptr = rawBytes.bindMemory(to: UInt8.self).baseAddress else { return nil }
+
+            struct PatchStats {
+                let r: Int
+                let g: Int
+                let b: Int
+                let luma: Double
+                let chroma: Int
+                let spread: Int
+            }
+
+            func samplePatch(x0: Int, y0: Int, pw: Int, ph: Int) -> PatchStats? {
+                let sx0 = max(0, min(w - 1, x0))
+                let sy0 = max(0, min(h - 1, y0))
+                let sx1 = max(sx0 + 1, min(w, sx0 + pw))
+                let sy1 = max(sy0 + 1, min(h, sy0 + ph))
+
+                var rs: [Int] = []
+                var gs: [Int] = []
+                var bs: [Int] = []
+                let cap = (sx1 - sx0) * (sy1 - sy0)
+                rs.reserveCapacity(cap)
+                if bpp == 3 {
+                    gs.reserveCapacity(cap)
+                    bs.reserveCapacity(cap)
+                }
+
+                for y in sy0..<sy1 {
+                    let row = ptr + y * rowBytes
+                    for x in sx0..<sx1 {
+                        if bpp == 3 {
+                            let p = row + x * 3
+                            rs.append(Int(p[0]))
+                            gs.append(Int(p[1]))
+                            bs.append(Int(p[2]))
+                        } else {
+                            rs.append(Int(row[x]))
+                        }
+                    }
+                }
+                guard !rs.isEmpty else { return nil }
+
+                rs.sort()
+                let mid = rs.count / 2
+                let medR = rs[mid]
+                let medG: Int
+                let medB: Int
+                if bpp == 3 {
+                    gs.sort()
+                    bs.sort()
+                    medG = gs[mid]
+                    medB = bs[mid]
+                } else {
+                    medG = medR
+                    medB = medR
+                }
+
+                var devs: [Int] = []
+                devs.reserveCapacity(rs.count)
+                for y in sy0..<sy1 {
+                    let row = ptr + y * rowBytes
+                    for x in sx0..<sx1 {
+                        if bpp == 3 {
+                            let p = row + x * 3
+                            let d = max(abs(Int(p[0]) - medR), max(abs(Int(p[1]) - medG), abs(Int(p[2]) - medB)))
+                            devs.append(d)
+                        } else {
+                            devs.append(abs(Int(row[x]) - medR))
+                        }
+                    }
+                }
+                devs.sort()
+                let p90 = devs[min(devs.count - 1, Int(Double(devs.count) * 0.90))]
+                let luma = 0.299 * Double(medR) + 0.587 * Double(medG) + 0.114 * Double(medB)
+                let chroma = max(medR, max(medG, medB)) - min(medR, min(medG, medB))
+                return PatchStats(r: medR, g: medG, b: medB, luma: luma, chroma: chroma, spread: p90)
+            }
+
+            // 1. Sample 4 corners + 4 edge midpoints (inset past up to ~2.5% platen mechanical bezel on large images)
+            let patchW = max(2, min(18, w / 18))
+            let patchH = max(2, min(18, h / 18))
+            let insetX = w >= 100 ? max(2, Int((Double(w) * 0.025).rounded())) : 0
+            let insetY = h >= 100 ? max(2, Int((Double(h) * 0.025).rounded())) : 0
+
+            let origins: [(Int, Int)] = [
+                (insetX, insetY),                                           // top-left
+                (w - insetX - patchW, insetY),                              // top-right
+                (insetX, h - insetY - patchH),                              // bottom-left
+                (w - insetX - patchW, h - insetY - patchH),                 // bottom-right
+                ((w - patchW) / 2, insetY),                                 // top-center
+                ((w - patchW) / 2, h - insetY - patchH),                    // bottom-center
+                (insetX, (h - patchH) / 2),                                 // left-center
+                (w - insetX - patchW, (h - patchH) / 2)                     // right-center
+            ]
+
+            let lightUniformCandidates = origins
+                .compactMap { samplePatch(x0: $0.0, y0: $0.1, pw: patchW, ph: patchH) }
+                .filter { $0.spread <= 18 && $0.luma >= 185.0 && $0.chroma <= 36 }
+
+            guard let brightest = lightUniformCandidates.max(by: { $0.luma < $1.luma }) else {
+                return nil
+            }
+
+            let cluster = lightUniformCandidates.filter { cand in
+                max(abs(cand.r - brightest.r), max(abs(cand.g - brightest.g), abs(cand.b - brightest.b))) <= 24
+            }
+            let bgR = cluster.map(\.r).reduce(0, +) / cluster.count
+            let bgG = cluster.map(\.g).reduce(0, +) / cluster.count
+            let bgB = cluster.map(\.b).reduce(0, +) / cluster.count
+
+            var maxSpread = 0
+            for c in cluster {
+                let clusterDiff = max(abs(c.r - bgR), max(abs(c.g - bgG), abs(c.b - bgB)))
+                maxSpread = max(maxSpread, c.spread + clusterDiff)
+            }
+            let tolerance = max(18, min(42, maxSpread + 16))
+
+            @inline(__always)
+            func isContentPixel(x: Int, y: Int) -> Bool {
+                let row = ptr + y * rowBytes
+                if bpp == 3 {
+                    let p = row + x * 3
+                    let diff = max(abs(Int(p[0]) - bgR), max(abs(Int(p[1]) - bgG), abs(Int(p[2]) - bgB)))
+                    return diff > tolerance
+                } else {
+                    return abs(Int(row[x]) - bgR) > tolerance
+                }
+            }
+
+            // 2. Two-pass row/column content classification with dynamic bezel & speck filtering
+            func scanRows(x0: Int, x1: Int) -> (flags: [Bool], counts: [Int]) {
+                let span = max(1, x1 - x0)
+                let minCount = max(4, Int(Double(span) * 0.015))
+                let minRun = max(5, Int(Double(span) * 0.012))
+                var flags = [Bool](repeating: false, count: h)
+                var counts = [Int](repeating: 0, count: h)
+                for y in 0..<h {
+                    var count = 0
+                    var run = 0
+                    var maxRun = 0
+                    for x in x0..<x1 {
+                        if isContentPixel(x: x, y: y) {
+                            count += 1
+                            run += 1
+                            if run > maxRun { maxRun = run }
+                        } else {
+                            run = 0
+                        }
+                    }
+                    counts[y] = count
+                    flags[y] = (count >= minCount || maxRun >= minRun)
+                }
+                return (flags, counts)
+            }
+
+            func scanCols(y0: Int, y1: Int) -> (flags: [Bool], counts: [Int]) {
+                let span = max(1, y1 - y0)
+                let minCount = max(4, Int(Double(span) * 0.015))
+                let minRun = max(5, Int(Double(span) * 0.012))
+                var flags = [Bool](repeating: false, count: w)
+                var counts = [Int](repeating: 0, count: w)
+                for x in 0..<w {
+                    var count = 0
+                    var run = 0
+                    var maxRun = 0
+                    for y in y0..<y1 {
+                        if isContentPixel(x: x, y: y) {
+                            count += 1
+                            run += 1
+                            if run > maxRun { maxRun = run }
+                        } else {
+                            run = 0
+                        }
+                    }
+                    counts[x] = count
+                    flags[x] = (count >= minCount || maxRun >= minRun)
+                }
+                return (flags, counts)
+            }
+
+            // Skips outer mechanical bezels (up to 3% of dim when followed by a clear blank-lid gap)
+            // and drops tiny isolated dust/scuff speck islands separated by blank space from real content.
+            func findAxisBounds(flags: [Bool], counts: [Int], otherSpan: Int) -> (Int, Int)? {
+                let n = flags.count
+                let maxBezel = n >= 100 ? max(4, Int(Double(n) * 0.03)) : 0
+                let minBlankGap = n >= 100 ? max(4, Int(Double(n) * 0.012)) : 0
+
+                var startBound = 0
+                if maxBezel > 0 {
+                    var blankRun = 0
+                    let limit = min(n, maxBezel + minBlankGap)
+                    for i in 0..<limit {
+                        if !flags[i] {
+                            blankRun += 1
+                            if blankRun >= minBlankGap {
+                                startBound = i - blankRun + 1
+                                break
+                            }
+                        } else {
+                            blankRun = 0
+                        }
+                    }
+                }
+
+                var endBound = n - 1
+                if maxBezel > 0 {
+                    var blankRun = 0
+                    let limit = max(0, n - maxBezel - minBlankGap)
+                    for i in stride(from: n - 1, through: limit, by: -1) {
+                        if !flags[i] {
+                            blankRun += 1
+                            if blankRun >= minBlankGap {
+                                endBound = i + blankRun - 1
+                                break
+                            }
+                        } else {
+                            blankRun = 0
+                        }
+                    }
+                }
+
+                guard endBound > startBound else { return nil }
+
+                let minIslandPixels = max(16, Int(Double(otherSpan) * 0.05))
+                var firstStart: Int?
+                var lastEnd: Int?
+                var i = startBound
+                while i <= endBound {
+                    if flags[i] {
+                        let s = i
+                        var totalPixels = 0
+                        while i <= endBound && flags[i] {
+                            totalPixels += counts[i]
+                            i += 1
+                        }
+                        let e = i - 1
+                        let thickness = e - s + 1
+                        if thickness >= 3 || totalPixels >= minIslandPixels {
+                            if firstStart == nil { firstStart = s }
+                            lastEnd = e
+                        }
+                    } else {
+                        i += 1
+                    }
+                }
+
+                guard let firstStart, let lastEnd, lastEnd > firstStart else { return nil }
+                return (firstStart, lastEnd)
+            }
+
+            // Pass 1: exclude outer 3% perpendicular strip so cross-axis platen bezels don't leak into counts
+            let marginX = w >= 100 ? max(4, Int(Double(w) * 0.03)) : 0
+            let marginY = h >= 100 ? max(4, Int(Double(h) * 0.03)) : 0
+            let scanX1 = max(marginX + 1, w - marginX)
+            let scanY1 = max(marginY + 1, h - marginY)
+            let rows1 = scanRows(x0: marginX, x1: scanX1)
+            let cols1 = scanCols(y0: marginY, y1: scanY1)
+            guard let (top1, bottom1) = findAxisBounds(flags: rows1.flags, counts: rows1.counts, otherSpan: scanX1 - marginX),
+                  let (left1, right1) = findAxisBounds(flags: cols1.flags, counts: cols1.counts, otherSpan: scanY1 - marginY) else {
+                return nil
+            }
+
+            // Pass 2: refine each axis strictly inside the other axis's detected content bounds
+            let rows2 = scanRows(x0: left1, x1: right1 + 1)
+            let cols2 = scanCols(y0: top1, y1: bottom1 + 1)
+            guard let (top, bottom) = findAxisBounds(flags: rows2.flags, counts: rows2.counts, otherSpan: right1 - left1 + 1),
+                  let (left, right) = findAxisBounds(flags: cols2.flags, counts: cols2.counts, otherSpan: bottom1 - top1 + 1),
+                  right > left,
+                  bottom > top else {
+                return nil
+            }
+
+            // 3. Convert to normalized coords with subtle protective padding on trimmed edges
+            let pad = max(0.0, paddingFraction)
+            var nx1 = Double(left) / Double(w)
+            var ny1 = Double(top) / Double(h)
+            var nx2 = Double(right + 1) / Double(w)
+            var ny2 = Double(bottom + 1) / Double(h)
+
+            if left > 0 { nx1 = max(0.0, nx1 - pad) }
+            if top > 0 { ny1 = max(0.0, ny1 - pad) }
+            if right < w - 1 { nx2 = min(1.0, nx2 + pad) }
+            if bottom < h - 1 { ny2 = min(1.0, ny2 + pad) }
+
+            let nw = nx2 - nx1
+            let nh = ny2 - ny1
+            guard nw >= 0.04, nh >= 0.04 else { return nil }
+
+            // Skip negligible (< ~1.5% total) trims
+            if nx1 < 0.008 && ny1 < 0.008 && nw > 0.984 && nh > 0.984 {
+                return nil
+            }
+
+            return NormalizedCropRect(x: nx1, y: ny1, width: nw, height: nh).clamped()
+        }
+    }
 }

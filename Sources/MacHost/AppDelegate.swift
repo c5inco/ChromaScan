@@ -251,6 +251,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let zoomActualItem = viewMenu.addItem(withTitle: "Actual Size (100%)", action: #selector(MainWindowController.zoomActualSizeClicked), keyEquivalent: "1")
         zoomActualItem.keyEquivalentModifierMask = [.command]
         viewMenu.addItem(.separator())
+        let trimEmptySpaceItem = viewMenu.addItem(withTitle: "Trim Empty Space", action: #selector(MainWindowController.trimEmptySpaceClicked), keyEquivalent: "t")
+        trimEmptySpaceItem.keyEquivalentModifierMask = [.command, .shift]
         let resetCropItem = viewMenu.addItem(withTitle: "Reset Crop to Full Page", action: #selector(MainWindowController.resetCrop), keyEquivalent: "0")
         resetCropItem.keyEquivalentModifierMask = [.command, .option]
         let toggleInspItem = viewMenu.addItem(withTitle: "Toggle Inspector", action: #selector(MainWindowController.toggleInspector), keyEquivalent: "i")

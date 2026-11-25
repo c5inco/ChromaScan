@@ -343,6 +343,9 @@ final class CompanionServer {
         case .setCropRect(let cropRect):
             engine.setCropRect(cropRect)
 
+        case .trimEmptySpace:
+            engine.trimEmptySpace()
+
         case .setViewMode(let mode):
             engine.setViewMode(mode)
 

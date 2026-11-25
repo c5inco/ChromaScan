@@ -198,6 +198,7 @@ final class RemoteSessionStore {
             if let v = patch.intent { s.intent = v }
             if let v = patch.transferFormat { s.transferFormat = v }
             if let v = patch.rotation { s.rotation = v }
+            if let v = patch.autoTrimEmptySpace { s.autoTrimEmptySpace = v }
             if let v = patch.hardwareBrightness { s.hardwareBrightness = v }
             if let v = patch.hardwareContrast { s.hardwareContrast = v }
             if let v = patch.colorProfile { s.colorProfile = v }
@@ -229,7 +230,8 @@ final class RemoteSessionStore {
                 activeImageGeneration: snap.activeImageGeneration,
                 scanPixelWidth: snap.scanPixelWidth,
                 scanPixelHeight: snap.scanPixelHeight,
-                scanDPI: snap.scanDPI
+                scanDPI: snap.scanDPI,
+                isScanTrimmed: snap.isScanTrimmed
             )
             snapshot = snap
         }
@@ -260,7 +262,8 @@ final class RemoteSessionStore {
                 activeImageGeneration: snap.activeImageGeneration,
                 scanPixelWidth: snap.scanPixelWidth,
                 scanPixelHeight: snap.scanPixelHeight,
-                scanDPI: snap.scanDPI
+                scanDPI: snap.scanDPI,
+                isScanTrimmed: snap.isScanTrimmed
             )
         }
 
@@ -288,6 +291,13 @@ final class RemoteSessionStore {
 
     func resetCrop() {
         setCropRect(.full, immediate: true)
+    }
+
+    func trimEmptySpace() {
+        if snapshot?.viewMode == .scan {
+            clearHighResTile()
+        }
+        client.send(.trimEmptySpace)
     }
 
     func setViewMode(_ mode: CanvasViewMode) {
@@ -353,7 +363,8 @@ final class RemoteSessionStore {
             let pw = nf.string(from: NSNumber(value: w)) ?? "\(w)"
             let ph = nf.string(from: NSNumber(value: h)) ?? "\(h)"
             let profile = snap.settings.colorMode == .grayscale8 ? "Grayscale" : snap.settings.colorProfile.shortName
-            return "\(pw)×\(ph) px · \(dpi) DPI · \(profile)"
+            let trimSuffix = snap.isScanTrimmed ? " · Trimmed" : ""
+            return "\(pw)×\(ph) px · \(dpi) DPI · \(profile)\(trimSuffix)"
         }
 
         return plannedCaptureReadout
