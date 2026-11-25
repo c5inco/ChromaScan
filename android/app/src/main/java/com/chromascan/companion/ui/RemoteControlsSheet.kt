@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomSheetDefaults
@@ -47,16 +48,25 @@ import androidx.compose.material3.ToggleButton
 import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.chromascan.companion.R
 import com.chromascan.companion.model.ColorProfileMode
 import com.chromascan.companion.model.OutputFormat
@@ -331,12 +341,33 @@ private fun ExpressiveToggleRow(
 @Composable
 private fun ExpressiveSliderRow(
     label: String,
-    valueText: String,
+    valueText: (Float) -> String,
     value: Float,
     range: ClosedFloatingPointRange<Float>,
+    step: Float = 0f,
     enabled: Boolean = true,
-    onValueChange: (Float) -> Unit
+    onValueCommit: (Float) -> Unit
 ) {
+    val scope = rememberCoroutineScope()
+    var localValue by remember { mutableFloatStateOf(value) }
+    var isDragging by remember { mutableStateOf(false) }
+    var throttleJob by remember { mutableStateOf<Job?>(null) }
+
+    LaunchedEffect(value) {
+        if (!isDragging) {
+            localValue = value
+        }
+    }
+
+    fun snap(raw: Float): Float {
+        val clamped = raw.coerceIn(range.start, range.endInclusive)
+        if (step <= 0f) return clamped
+        val offset = ((clamped - range.start) / step).roundToInt() * step
+        return (range.start + offset).coerceIn(range.start, range.endInclusive)
+    }
+
+    val displayed = localValue.coerceIn(range.start, range.endInclusive)
+
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -354,7 +385,7 @@ private fun ExpressiveSliderRow(
                 color = MaterialTheme.colorScheme.surfaceContainerHighest
             ) {
                 Text(
-                    text = valueText,
+                    text = valueText(displayed),
                     style = MaterialTheme.typography.labelMedium.copy(
                         fontFamily = GoogleSansFlexFamily,
                         fontFeatureSettings = "tnum"
@@ -365,8 +396,25 @@ private fun ExpressiveSliderRow(
             }
         }
         Slider(
-            value = value.coerceIn(range.start, range.endInclusive),
-            onValueChange = onValueChange,
+            value = displayed,
+            onValueChange = { raw ->
+                isDragging = true
+                val snapped = snap(raw)
+                localValue = snapped
+                if (throttleJob == null) {
+                    throttleJob = scope.launch {
+                        delay(120)
+                        throttleJob = null
+                        onValueCommit(localValue)
+                    }
+                }
+            },
+            onValueChangeFinished = {
+                throttleJob?.cancel()
+                throttleJob = null
+                isDragging = false
+                onValueCommit(localValue)
+            },
             valueRange = range,
             enabled = enabled,
             colors = SliderDefaults.colors(
@@ -606,21 +654,23 @@ private fun HardwareToneSection(
         snap.capabilities?.brightnessRange?.let { br ->
             ExpressiveSliderRow(
                 label = "Brightness",
-                valueText = "${snap.settings.hardwareBrightness}",
+                valueText = { "${it.roundToInt()}" },
                 value = snap.settings.hardwareBrightness.toFloat(),
                 range = br.min.toFloat()..br.max.toFloat(),
+                step = br.step.coerceAtLeast(1).toFloat(),
                 enabled = !snap.isBusy,
-                onValueChange = { onUpdateSettings(ScanSettingsPatch(hardwareBrightness = it.roundToInt())) }
+                onValueCommit = { onUpdateSettings(ScanSettingsPatch(hardwareBrightness = it.roundToInt())) }
             )
         }
         snap.capabilities?.contrastRange?.let { cr ->
             ExpressiveSliderRow(
                 label = "Contrast",
-                valueText = "${snap.settings.hardwareContrast}",
+                valueText = { "${it.roundToInt()}" },
                 value = snap.settings.hardwareContrast.toFloat(),
                 range = cr.min.toFloat()..cr.max.toFloat(),
+                step = cr.step.coerceAtLeast(1).toFloat(),
                 enabled = !snap.isBusy,
-                onValueChange = { onUpdateSettings(ScanSettingsPatch(hardwareContrast = it.roundToInt())) }
+                onValueCommit = { onUpdateSettings(ScanSettingsPatch(hardwareContrast = it.roundToInt())) }
             )
         }
         TextButton(
@@ -638,7 +688,17 @@ private fun ColorAndOutputSection(
     snap: SessionSnapshot,
     onUpdateSettings: (ScanSettingsPatch) -> Unit
 ) {
-    var filenameDraft by remember(snap.settings.baseFilename) { mutableStateOf(snap.settings.baseFilename) }
+    val scope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
+    var filenameDraft by remember { mutableStateOf(snap.settings.baseFilename) }
+    var isEditingFilename by remember { mutableStateOf(false) }
+    var filenameDebounceJob by remember { mutableStateOf<Job?>(null) }
+
+    LaunchedEffect(snap.settings.baseFilename) {
+        if (!isEditingFilename) {
+            filenameDraft = snap.settings.baseFilename
+        }
+    }
 
     ExpressiveSectionCard(title = "Color & Mac archive", iconRes = R.drawable.ms_palette) {
         // 1-tap Color Profile chips
@@ -703,10 +763,10 @@ private fun ColorAndOutputSection(
         if (snap.settings.outputFormat.supportsQuality) {
             ExpressiveSliderRow(
                 label = "Compression quality",
-                valueText = "${(snap.settings.quality * 100.0).roundToInt()}%",
+                valueText = { "${(it * 100f).roundToInt()}%" },
                 value = snap.settings.quality.toFloat(),
                 range = 0.5f..1.0f,
-                onValueChange = { onUpdateSettings(ScanSettingsPatch(quality = it.toDouble())) }
+                onValueCommit = { onUpdateSettings(ScanSettingsPatch(quality = it.toDouble())) }
             )
             ExpressiveToggleRow(
                 label = "Preview compression live",
@@ -750,15 +810,36 @@ private fun ColorAndOutputSection(
 
         OutlinedTextField(
             value = filenameDraft,
-            onValueChange = {
-                filenameDraft = it
-                onUpdateSettings(ScanSettingsPatch(baseFilename = it))
+            onValueChange = { updated ->
+                filenameDraft = updated
+                filenameDebounceJob?.cancel()
+                filenameDebounceJob = scope.launch {
+                    delay(350)
+                    onUpdateSettings(ScanSettingsPatch(baseFilename = updated))
+                }
             },
             label = { Text("Filename") },
             singleLine = true,
             enabled = !snap.isBusy,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(
+                onDone = {
+                    filenameDebounceJob?.cancel()
+                    onUpdateSettings(ScanSettingsPatch(baseFilename = filenameDraft))
+                    focusManager.clearFocus()
+                }
+            ),
             shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .onFocusChanged { focusState ->
+                    val wasEditing = isEditingFilename
+                    isEditingFilename = focusState.isFocused
+                    if (wasEditing && !focusState.isFocused) {
+                        filenameDebounceJob?.cancel()
+                        onUpdateSettings(ScanSettingsPatch(baseFilename = filenameDraft))
+                    }
+                }
         )
 
         ExpressiveToggleRow(
@@ -789,28 +870,28 @@ private fun SoftwareToneSection(
     ExpressiveSectionCard(title = "Tone adjustments (software)", iconRes = R.drawable.ms_contrast) {
         ExpressiveSliderRow(
             label = "Black point",
-            valueText = "${(tone.blackPoint * 100.0).roundToInt()}%",
+            valueText = { "${(it * 100f).roundToInt()}%" },
             value = tone.blackPoint.toFloat(),
             range = 0.0f..0.25f,
-            onValueChange = {
+            onValueCommit = {
                 onUpdateSettings(ScanSettingsPatch(toneAdjustments = tone.copy(blackPoint = it.toDouble())))
             }
         )
         ExpressiveSliderRow(
             label = "White point",
-            valueText = "${(tone.whitePoint * 100.0).roundToInt()}%",
+            valueText = { "${(it * 100f).roundToInt()}%" },
             value = tone.whitePoint.toFloat(),
             range = 0.75f..1.0f,
-            onValueChange = {
+            onValueCommit = {
                 onUpdateSettings(ScanSettingsPatch(toneAdjustments = tone.copy(whitePoint = it.toDouble())))
             }
         )
         ExpressiveSliderRow(
             label = "Gamma",
-            valueText = String.format(Locale.US, "%.2f", tone.gamma),
+            valueText = { String.format(Locale.US, "%.2f", it) },
             value = tone.gamma.toFloat(),
             range = 0.5f..2.0f,
-            onValueChange = {
+            onValueCommit = {
                 onUpdateSettings(ScanSettingsPatch(toneAdjustments = tone.copy(gamma = it.toDouble())))
             }
         )
@@ -919,17 +1000,24 @@ private fun ManualScannerDialog(
                 ExpressiveToggleRow(
                     label = "Use HTTPS (port 443)",
                     checked = useTLS,
-                    onCheckedChange = { useTLS = it }
+                    onCheckedChange = { enabled ->
+                        useTLS = enabled
+                        if (enabled && portText == "8080") portText = "443"
+                        if (!enabled && portText == "443") portText = "8080"
+                    }
                 )
             }
         },
         confirmButton = {
+            val parsedPort = portText.toIntOrNull()
+            val validPort = parsedPort != null && parsedPort in 1..65535
             FilledTonalButton(
                 onClick = {
-                    val port = portText.toIntOrNull() ?: if (useTLS) 443 else 8080
-                    onAdd(host.trim(), port, useTLS)
+                    if (parsedPort != null && parsedPort in 1..65535) {
+                        onAdd(host.trim(), parsedPort, useTLS)
+                    }
                 },
-                enabled = host.trim().isNotEmpty()
+                enabled = host.trim().isNotEmpty() && validPort
             ) {
                 Text("Add")
             }

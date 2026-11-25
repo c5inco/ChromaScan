@@ -16,11 +16,13 @@ import com.chromascan.companion.model.OutputFormat
 import com.chromascan.companion.model.ScanRotation
 import com.chromascan.companion.model.ScanSettingsPatch
 import com.chromascan.companion.model.SessionSnapshot
+import com.chromascan.companion.network.CompanionTarget
 import com.chromascan.companion.store.RemoteSessionStore
 import kotlinx.serialization.encodeToString
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -185,5 +187,25 @@ class CompanionProtocolTest {
         assertTrue(readout.contains("8.50\"×11.69\""))
         assertEquals(CompanionOperation.SCAN, CompanionJson.decodeFromString<CompanionOperation>("\"scan\""))
         assertEquals(OutputFormat.HEIC, CompanionJson.decodeFromString<OutputFormat>("\"heic\""))
+    }
+
+    @Test
+    fun wsUrlValidationRejectsMalformedHostsAndPorts() {
+        assertEquals("ws://192.168.4.45:55745/", CompanionTarget.buildWsUrl("192.168.4.45", 55745))
+        assertEquals("ws://mac-studio.local:8080/", CompanionTarget.buildWsUrl("mac-studio.local", 8080))
+        assertNull(CompanionTarget.buildWsUrl("bad host with spaces", 8080))
+        assertNull(CompanionTarget.buildWsUrl("192.168.1.1/path", 8080))
+        assertNull(CompanionTarget.buildWsUrl("192.168.1.1", 0))
+        assertNull(CompanionTarget.buildWsUrl("192.168.1.1", 70000))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun binaryFrameRejectsOutOfRangeUInt32Generation() {
+        CompanionBinaryFrame(
+            kind = CompanionFrameKind.PREVIEW_PROXY,
+            generation = 0x1_0000_0000L,
+            requestID = 0L,
+            payload = byteArrayOf(1)
+        ).pack()
     }
 }

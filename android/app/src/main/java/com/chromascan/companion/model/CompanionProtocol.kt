@@ -319,6 +319,8 @@ data class CompanionBinaryFrame(
     val payload: ByteArray
 ) {
     fun pack(): ByteArray {
+        require(generation in 0L..0xFFFF_FFFFL) { "generation out of UInt32 range: $generation" }
+        require(requestID in 0L..0xFFFF_FFFFL) { "requestID out of UInt32 range: $requestID" }
         val out = ByteArray(CompanionConstants.BINARY_HEADER_LENGTH + payload.size)
         out[0] = kind.rawValue
         writeUInt32BigEndian(out, 1, generation)

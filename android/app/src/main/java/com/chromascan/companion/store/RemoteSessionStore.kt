@@ -3,6 +3,7 @@ package com.chromascan.companion.store
 import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -84,6 +85,8 @@ data class RemoteUiState(
     val progress: RemoteProgressState? = null,
     val proxyBitmap: Bitmap? = null,
     val proxyInfo: CompanionImageReadyInfo? = null,
+    val proxyRotation: ScanRotation = ScanRotation.DEG_0,
+    val isAwaitingRotatedProxy: Boolean = false,
     val tileBitmap: Bitmap? = null,
     val tileNormalizedRect: NormalizedCropRect? = null,
     val isLoadingTile: Boolean = false,
@@ -92,6 +95,9 @@ data class RemoteUiState(
     val isSavingToPhotos: Boolean = false,
     val notifyOnScanComplete: Boolean = true
 ) {
+    val isConnected: Boolean
+        get() = connectionStatus is ConnectionStatus.Connected
+
     val isScanActive: Boolean
         get() {
             val snap = snapshot ?: return false
@@ -135,7 +141,7 @@ class RemoteSessionStore private constructor(context: Context) {
         val requestID: Long
     )
 
-    private val pendingImageInfoByKey = HashMap<FrameKey, CompanionImageReadyInfo>()
+    private val pendingImageInfoByKey = LinkedHashMap<FrameKey, CompanionImageReadyInfo>()
     private var latestProxyGeneration: Long = 0L
     private var nextRequestID: Long = 1L
     private var activeTileRequestID: Long = 0L
@@ -146,17 +152,42 @@ class RemoteSessionStore private constructor(context: Context) {
     private var toastClearJob: Job? = null
     private var proxyDecodeJob: Job? = null
     private var tileDecodeJob: Job? = null
+    private var tileTimeoutJob: Job? = null
+    private var photosTimeoutJob: Job? = null
     private var isAppInBackground: Boolean = false
     private var lastServiceUpdateMs: Long = 0L
 
     init {
         ScanMonitorService.ensureChannels(appContext)
         wireClientCallbacks()
+        observeBonjourForReconnect()
         browser.start()
+    }
+
+    private fun observeBonjourForReconnect() {
+        scope.launch {
+            browser.hosts.collect { hosts ->
+                val target = client.activeTarget as? CompanionTarget.Bonjour ?: return@collect
+                if (_uiState.value.connectionStatus !is ConnectionStatus.Reconnecting) return@collect
+                val match = hosts.firstOrNull { h ->
+                    (target.hostID != null && h.hostID == target.hostID) ||
+                        h.name.equals(target.name, ignoreCase = true)
+                } ?: return@collect
+                client.updateBonjourEndpoint(match.hostAddress, match.port)
+            }
+        }
     }
 
     private fun wireClientCallbacks() {
         client.onStatusChanged = { status ->
+            if (status is ConnectionStatus.Reconnecting) {
+                clearPendingTransientRequests()
+                if (client.activeTarget is CompanionTarget.Bonjour && !browser.isSearching.value) {
+                    browser.start(clearExisting = false)
+                }
+            } else if (status is ConnectionStatus.Disconnected) {
+                clearPendingTransientRequests()
+            }
             _uiState.update { cur ->
                 val newPhase = if (status is ConnectionStatus.Disconnected && cur.phase is AuthPhase.Connected) {
                     AuthPhase.Browsing
@@ -168,12 +199,21 @@ class RemoteSessionStore private constructor(context: Context) {
         }
         client.onHostMessage = { message -> handleHostMessage(message) }
         client.onBinaryFrame = { frame -> handleBinaryFrame(frame) }
+        client.onInvalidTarget = { errMsg ->
+            _uiState.update {
+                it.copy(
+                    phase = AuthPhase.Browsing,
+                    errorAlert = RemoteErrorAlert("Invalid Host", errMsg)
+                )
+            }
+        }
     }
 
     // MARK: - Connection & Pairing
 
     fun connect(host: DiscoveredHost) {
         resetSessionImages()
+        clearPendingTransientRequests()
         _uiState.update { it.copy(phase = AuthPhase.Connecting(host.name)) }
         client.connect(
             CompanionTarget.Bonjour(
@@ -188,9 +228,21 @@ class RemoteSessionStore private constructor(context: Context) {
     fun connectManual(host: String, port: Int, pin: String? = null) {
         val clean = host.trim()
         if (clean.isEmpty() || port !in 1..65535) return
+        if (CompanionTarget.buildWsUrl(clean, port) == null) {
+            _uiState.update {
+                it.copy(
+                    errorAlert = RemoteErrorAlert(
+                        title = "Invalid Host",
+                        message = "Enter a valid hostname or IP address and port (1–65535)."
+                    )
+                )
+            }
+            return
+        }
         tokenStore.lastManualHost = clean
         tokenStore.lastManualPort = port.toString()
         resetSessionImages()
+        clearPendingTransientRequests()
         _uiState.update { it.copy(phase = AuthPhase.Connecting("$clean:$port")) }
         client.connect(CompanionTarget.Manual(clean, port), pin = pin)
     }
@@ -205,6 +257,7 @@ class RemoteSessionStore private constructor(context: Context) {
         ScanMonitorService.stop(appContext)
         client.disconnect(clearTarget = true)
         resetSessionImages()
+        clearPendingTransientRequests()
         _uiState.update {
             it.copy(
                 phase = AuthPhase.Browsing,
@@ -212,13 +265,13 @@ class RemoteSessionStore private constructor(context: Context) {
                 progress = null
             )
         }
-        browser.start()
+        browser.start(clearExisting = true)
     }
 
     fun onAppForegrounded() {
         isAppInBackground = false
         if (_uiState.value.phase is AuthPhase.Browsing) {
-            browser.start()
+            browser.start(clearExisting = false)
         } else {
             client.reconnectIfNeeded()
         }
@@ -227,7 +280,7 @@ class RemoteSessionStore private constructor(context: Context) {
     fun onAppBackgrounded() {
         isAppInBackground = true
         if (_uiState.value.phase is AuthPhase.Browsing) {
-            browser.stop()
+            browser.stop(clearHosts = false)
         }
         updateForegroundMonitorIfNeeded(force = true)
     }
@@ -258,11 +311,12 @@ class RemoteSessionStore private constructor(context: Context) {
 
     fun addManualScanner(host: String, port: Int, useTLS: Boolean) {
         val clean = host.trim()
-        if (clean.isEmpty()) return
+        if (clean.isEmpty() || port !in 1..65535) return
         client.send(ClientMessage.AddManualScanner(host = clean, port = port, useTLS = useTLS))
     }
 
     fun updateSettings(patch: ScanSettingsPatch) {
+        val rotationChanged = patch.rotation != null && patch.rotation != _uiState.value.snapshot?.settings?.rotation
         _uiState.update { cur ->
             val snap = cur.snapshot ?: return@update cur
             var s = snap.settings
@@ -285,7 +339,10 @@ class RemoteSessionStore private constructor(context: Context) {
             }
             patch.baseFilename?.let { s = s.copy(baseFilename = it) }
             patch.autoIncrement?.let { s = s.copy(autoIncrement = it) }
-            cur.copy(snapshot = snap.copy(settings = s))
+            cur.copy(
+                snapshot = snap.copy(settings = s),
+                isAwaitingRotatedProxy = if (rotationChanged && cur.proxyBitmap != null) true else cur.isAwaitingRotatedProxy
+            )
         }
         client.send(ClientMessage.UpdateSettings(patch))
     }
@@ -340,7 +397,19 @@ class RemoteSessionStore private constructor(context: Context) {
     }
 
     fun triggerScan() {
-        client.send(ClientMessage.TriggerScan)
+        val sent = client.send(ClientMessage.TriggerScan)
+        if (sent && _uiState.value.notifyOnScanComplete && !isAppInBackground) {
+            // Start foreground service immediately from the user's foreground tap so Android 12+
+            // background-start restrictions never block monitoring if the user locks the phone right away.
+            val dpi = _uiState.value.snapshot?.settings?.resolution ?: 1200
+            ScanMonitorService.updateProgress(
+                context = appContext,
+                title = "Scanning · $dpi DPI",
+                detail = "Starting scanner…",
+                fraction = null,
+                allowStartService = true
+            )
+        }
     }
 
     fun triggerExport() {
@@ -352,22 +421,38 @@ class RemoteSessionStore private constructor(context: Context) {
     }
 
     fun requestHighResTile(normalizedRect: NormalizedCropRect, maxPixelWidth: Int) {
-        val snap = _uiState.value.snapshot ?: return
-        if (snap.viewMode != CanvasViewMode.SCAN || !snap.hasScanImage) return
+        val state = _uiState.value
+        val snap = state.snapshot ?: return
+        if (!state.isConnected || snap.viewMode != CanvasViewMode.SCAN || !snap.hasScanImage) return
         val reqID = allocateRequestID()
         activeTileRequestID = reqID
         _uiState.update { it.copy(isLoadingTile = true) }
-        client.send(
+        val sent = client.send(
             ClientMessage.RequestTile(
                 requestID = reqID,
                 normalizedRect = normalizedRect,
                 maxPixelWidth = maxPixelWidth.coerceIn(256, 3200)
             )
         )
+        if (!sent) {
+            activeTileRequestID = 0L
+            _uiState.update { it.copy(isLoadingTile = false) }
+            return
+        }
+        tileTimeoutJob?.cancel()
+        tileTimeoutJob = scope.launch {
+            delay(10_000)
+            if (activeTileRequestID == reqID) {
+                activeTileRequestID = 0L
+                _uiState.update { it.copy(isLoadingTile = false) }
+            }
+        }
     }
 
     fun clearHighResTile() {
         activeTileRequestID = 0L
+        tileTimeoutJob?.cancel()
+        tileTimeoutJob = null
         tileDecodeJob?.cancel()
         tileDecodeJob = null
         _uiState.update {
@@ -382,7 +467,7 @@ class RemoteSessionStore private constructor(context: Context) {
     fun saveCopyToPhotos() {
         val state = _uiState.value
         val snap = state.snapshot ?: return
-        if (!snap.hasScanImage || state.isSavingToPhotos) return
+        if (!state.isConnected || !snap.hasScanImage || state.isSavingToPhotos) return
         val reqID = allocateRequestID()
         activePhotosRequestID = reqID
         _uiState.update { it.copy(isSavingToPhotos = true) }
@@ -391,13 +476,36 @@ class RemoteSessionStore private constructor(context: Context) {
         } else {
             OutputFormat.HEIC
         }
-        client.send(
+        val sent = client.send(
             ClientMessage.RequestPhotosCopy(
                 requestID = reqID,
                 format = format,
                 quality = snap.settings.quality
             )
         )
+        if (!sent) {
+            activePhotosRequestID = 0L
+            _uiState.update {
+                it.copy(
+                    isSavingToPhotos = false,
+                    errorAlert = RemoteErrorAlert("Not Connected", "Unable to request copy while disconnected from Mac.")
+                )
+            }
+            return
+        }
+        photosTimeoutJob?.cancel()
+        photosTimeoutJob = scope.launch {
+            delay(15_000)
+            if (activePhotosRequestID == reqID) {
+                activePhotosRequestID = 0L
+                _uiState.update {
+                    it.copy(
+                        isSavingToPhotos = false,
+                        errorAlert = RemoteErrorAlert("Save Timed Out", "The Mac host did not return a gallery copy in time.")
+                    )
+                }
+            }
+        }
     }
 
     // MARK: - Incoming Messages & Binary Frames
@@ -405,20 +513,32 @@ class RemoteSessionStore private constructor(context: Context) {
     private fun handleHostMessage(message: HostMessage) {
         when (message) {
             is HostMessage.Welcome -> {
+                client.markAuthenticated()
                 client.saveAuthToken(message.authToken, message.hostID)
-                browser.stop()
+                browser.stop(clearHosts = false)
+                // Reset per-connection image generation & transient request state so a Mac restart
+                // with activeImageGeneration starting at 0 is never blocked by a stale generation counter.
+                resetConnectionImageCounters()
+                clearPendingTransientRequests()
                 _uiState.update {
-                    it.copy(phase = AuthPhase.Connected(message.hostID, message.hostName))
+                    it.copy(
+                        phase = AuthPhase.Connected(message.hostID, message.hostName),
+                        proxyRotation = message.snapshot.settings.rotation,
+                        isAwaitingRotatedProxy = false
+                    )
                 }
                 applyIncomingSnapshot(message.snapshot)
             }
 
             is HostMessage.AuthRequired -> {
-                if (!message.reason.isNullOrEmpty()) {
+                client.clearPendingPin()
+                val reason = message.reason
+                val isPinFailure = reason?.contains("PIN", ignoreCase = true) == true
+                if (!reason.isNullOrEmpty() && !isPinFailure) {
                     client.clearSavedToken(message.hostID)
                 }
                 _uiState.update {
-                    it.copy(phase = AuthPhase.NeedsPin(message.hostID, message.hostName, message.reason))
+                    it.copy(phase = AuthPhase.NeedsPin(message.hostID, message.hostName, reason))
                 }
             }
 
@@ -441,6 +561,10 @@ class RemoteSessionStore private constructor(context: Context) {
             is HostMessage.ImageReady -> {
                 val info = message.toInfo()
                 val key = FrameKey(info.kind.frameKind, info.generation, info.requestID)
+                if (pendingImageInfoByKey.size >= 32) {
+                    val oldest = pendingImageInfoByKey.keys.firstOrNull()
+                    if (oldest != null) pendingImageInfoByKey.remove(oldest)
+                }
                 pendingImageInfoByKey[key] = info
                 if (info.kind == CompanionImageKind.PREVIEW_PROXY || info.kind == CompanionImageKind.SCAN_PROXY) {
                     if (info.generation >= latestProxyGeneration) {
@@ -484,7 +608,14 @@ class RemoteSessionStore private constructor(context: Context) {
             is HostMessage.PushStatus -> Unit
 
             is HostMessage.Error -> {
-                ScanMonitorService.stop(appContext)
+                photosTimeoutJob?.cancel()
+                photosTimeoutJob = null
+                activePhotosRequestID = 0L
+                // Only stop scan monitoring if a scan is no longer active; unrelated errors
+                // (e.g. Photos copy failure) must not kill an in-progress scan monitor.
+                if (!_uiState.value.isScanActive) {
+                    ScanMonitorService.stop(appContext)
+                }
                 _uiState.update {
                     it.copy(
                         isSavingToPhotos = false,
@@ -501,10 +632,17 @@ class RemoteSessionStore private constructor(context: Context) {
         val prev = _uiState.value.snapshot
         val modeChanged = prev?.viewMode != snap.viewMode
         val genChanged = prev?.activeImageGeneration != snap.activeImageGeneration
+        val rotationChanged = prev != null && prev.settings.rotation != snap.settings.rotation
         val hasActiveImage = if (snap.viewMode == CanvasViewMode.SCAN) snap.hasScanImage else snap.hasPreviewImage
+
+        if (snap.activeImageGeneration < latestProxyGeneration) {
+            latestProxyGeneration = snap.activeImageGeneration
+        }
 
         if (modeChanged || genChanged) {
             activeTileRequestID = 0L
+            tileTimeoutJob?.cancel()
+            tileTimeoutJob = null
             tileDecodeJob?.cancel()
             tileDecodeJob = null
         }
@@ -515,6 +653,12 @@ class RemoteSessionStore private constructor(context: Context) {
                 progress = if (!snap.isBusy) null else cur.progress,
                 proxyBitmap = if (!hasActiveImage) null else cur.proxyBitmap,
                 proxyInfo = if (!hasActiveImage) null else cur.proxyInfo,
+                proxyRotation = if (!hasActiveImage) snap.settings.rotation else cur.proxyRotation,
+                isAwaitingRotatedProxy = when {
+                    !hasActiveImage -> false
+                    rotationChanged -> true
+                    else -> cur.isAwaitingRotatedProxy
+                },
                 tileBitmap = if (modeChanged || genChanged || !hasActiveImage) null else cur.tileBitmap,
                 tileNormalizedRect = if (modeChanged || genChanged || !hasActiveImage) null else cur.tileNormalizedRect,
                 isLoadingTile = if (modeChanged || genChanged || !hasActiveImage) false else cur.isLoadingTile
@@ -540,10 +684,14 @@ class RemoteSessionStore private constructor(context: Context) {
                     } ?: return@launch
                     if (gen < latestProxyGeneration) return@launch
                     activeTileRequestID = 0L
+                    tileTimeoutJob?.cancel()
+                    tileTimeoutJob = null
                     _uiState.update { cur ->
                         cur.copy(
                             proxyBitmap = bitmap,
                             proxyInfo = info ?: cur.proxyInfo,
+                            proxyRotation = cur.snapshot?.settings?.rotation ?: cur.proxyRotation,
+                            isAwaitingRotatedProxy = false,
                             tileBitmap = null,
                             tileNormalizedRect = null,
                             isLoadingTile = false
@@ -554,6 +702,8 @@ class RemoteSessionStore private constructor(context: Context) {
 
             CompanionFrameKind.HIGH_RES_TILE -> {
                 if (frame.requestID != activeTileRequestID) return
+                tileTimeoutJob?.cancel()
+                tileTimeoutJob = null
                 val reqID = frame.requestID
                 val payload = frame.payload
                 tileDecodeJob?.cancel()
@@ -574,6 +724,9 @@ class RemoteSessionStore private constructor(context: Context) {
 
             CompanionFrameKind.PHOTOS_COPY -> {
                 if (frame.requestID != activePhotosRequestID) return
+                photosTimeoutJob?.cancel()
+                photosTimeoutJob = null
+                activePhotosRequestID = 0L
                 persistImageToGallery(frame.payload)
             }
         }
@@ -582,6 +735,8 @@ class RemoteSessionStore private constructor(context: Context) {
     private fun persistImageToGallery(bytes: ByteArray) {
         scope.launch {
             val result = withContext(Dispatchers.IO) {
+                val resolver = appContext.contentResolver
+                var insertedUri: Uri? = null
                 runCatching {
                     val isHeic = ImageDecoding.isLikelyHeic(bytes)
                     val mime = if (isHeic) "image/heic" else "image/jpeg"
@@ -594,15 +749,22 @@ class RemoteSessionStore private constructor(context: Context) {
                         put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/ChromaScan")
                         put(MediaStore.Images.Media.IS_PENDING, 1)
                     }
-                    val resolver = appContext.contentResolver
                     val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
                         ?: error("Could not create MediaStore entry")
+                    insertedUri = uri
                     resolver.openOutputStream(uri)?.use { out ->
                         out.write(bytes)
                     } ?: error("Could not open MediaStore output stream")
                     values.clear()
                     values.put(MediaStore.Images.Media.IS_PENDING, 0)
-                    resolver.update(uri, values, null, null)
+                    val updated = resolver.update(uri, values, null, null)
+                    if (updated <= 0) {
+                        error("Failed to publish saved image in MediaStore")
+                    }
+                }.onFailure {
+                    insertedUri?.let { uri ->
+                        runCatching { resolver.delete(uri, null, null) }
+                    }
                 }
             }
             _uiState.update { it.copy(isSavingToPhotos = false) }
@@ -635,7 +797,8 @@ class RemoteSessionStore private constructor(context: Context) {
             context = appContext,
             title = info.title,
             detail = info.statusDetail,
-            fraction = info.progressFraction
+            fraction = info.progressFraction,
+            allowStartService = !isAppInBackground
         )
     }
 
@@ -645,16 +808,38 @@ class RemoteSessionStore private constructor(context: Context) {
         return nextRequestID
     }
 
-    private fun resetSessionImages() {
+    private fun resetConnectionImageCounters() {
         proxyDecodeJob?.cancel()
+        proxyDecodeJob = null
         tileDecodeJob?.cancel()
+        tileDecodeJob = null
         latestProxyGeneration = 0L
         activeTileRequestID = 0L
         pendingImageInfoByKey.clear()
+    }
+
+    private fun clearPendingTransientRequests() {
+        tileTimeoutJob?.cancel()
+        tileTimeoutJob = null
+        photosTimeoutJob?.cancel()
+        photosTimeoutJob = null
+        activeTileRequestID = 0L
+        activePhotosRequestID = 0L
+        _uiState.update {
+            it.copy(
+                isLoadingTile = false,
+                isSavingToPhotos = false
+            )
+        }
+    }
+
+    private fun resetSessionImages() {
+        resetConnectionImageCounters()
         _uiState.update {
             it.copy(
                 proxyBitmap = null,
                 proxyInfo = null,
+                isAwaitingRotatedProxy = false,
                 tileBitmap = null,
                 tileNormalizedRect = null,
                 isLoadingTile = false

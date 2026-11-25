@@ -27,8 +27,8 @@ data class DiscoveredHost(
 
 /**
  * Discovers ChromaScan Mac hosts over mDNS/Bonjour (`_chromascan._tcp.`).
- * Acquires a Wi-Fi multicast lock while browsing and serializes `NsdManager.resolveService`
- * calls on API < 34 to avoid `FAILURE_ALREADY_ACTIVE`.
+ * Acquires a Wi-Fi multicast lock while browsing, isolates each browse session with a
+ * monotonic generation token, and serializes `NsdManager.resolveService` on API < 34.
  */
 class HostBrowser(context: Context) {
     private val appContext = context.applicationContext
@@ -47,14 +47,20 @@ class HostBrowser(context: Context) {
 
     private val lock = Any()
     private val resolvedByServiceName = LinkedHashMap<String, DiscoveredHost>()
-    private val pendingResolveQueue = ArrayDeque<NsdServiceInfo>()
+    private val pendingResolveQueue = ArrayDeque<Pair<Long, NsdServiceInfo>>()
     private var isResolving = false
+    private var browseGeneration: Long = 0L
     private var discoveryListener: NsdManager.DiscoveryListener? = null
     private var multicastLock: WifiManager.MulticastLock? = null
     private val activeInfoCallbacks = mutableMapOf<String, NsdManager.ServiceInfoCallback>()
 
-    fun start() {
-        stop()
+    fun start(clearExisting: Boolean = true) {
+        stop(clearHosts = clearExisting)
+        val gen = synchronized(lock) {
+            browseGeneration += 1L
+            browseGeneration
+        }
+
         _browseError.value = null
         _isSearching.value = true
 
@@ -69,19 +75,22 @@ class HostBrowser(context: Context) {
 
         val listener = object : NsdManager.DiscoveryListener {
             override fun onDiscoveryStarted(regType: String) {
-                Log.i(TAG, "mDNS discovery started for $regType")
+                if (!isCurrentGeneration(gen)) return
+                Log.i(TAG, "mDNS discovery started for $regType (gen=$gen)")
                 _isSearching.value = true
                 _browseError.value = null
             }
 
             override fun onServiceFound(serviceInfo: NsdServiceInfo) {
+                if (!isCurrentGeneration(gen)) return
                 Log.d(TAG, "Found service: ${serviceInfo.serviceName} (${serviceInfo.serviceType})")
-                resolveServiceInfo(serviceInfo)
+                resolveServiceInfo(gen, serviceInfo)
             }
 
             override fun onServiceLost(serviceInfo: NsdServiceInfo) {
-                Log.d(TAG, "Lost service: ${serviceInfo.serviceName}")
                 synchronized(lock) {
+                    if (gen != browseGeneration) return
+                    Log.d(TAG, "Lost service: ${serviceInfo.serviceName}")
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                         activeInfoCallbacks.remove(serviceInfo.serviceName)?.let { cb ->
                             runCatching { nsdManager.unregisterServiceInfoCallback(cb) }
@@ -93,11 +102,13 @@ class HostBrowser(context: Context) {
             }
 
             override fun onDiscoveryStopped(serviceType: String) {
+                if (!isCurrentGeneration(gen)) return
                 Log.i(TAG, "mDNS discovery stopped for $serviceType")
                 _isSearching.value = false
             }
 
             override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                if (!isCurrentGeneration(gen)) return
                 Log.e(TAG, "Start discovery failed: $errorCode")
                 _isSearching.value = false
                 _browseError.value = "Discovery failed (code $errorCode)"
@@ -123,13 +134,9 @@ class HostBrowser(context: Context) {
         }
     }
 
-    fun stop() {
-        discoveryListener?.let { listener ->
-            runCatching { nsdManager.stopServiceDiscovery(listener) }
-        }
-        discoveryListener = null
-
+    fun stop(clearHosts: Boolean = false) {
         synchronized(lock) {
+            browseGeneration += 1L
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 for (cb in activeInfoCallbacks.values) {
                     runCatching { nsdManager.unregisterServiceInfoCallback(cb) }
@@ -137,8 +144,16 @@ class HostBrowser(context: Context) {
                 activeInfoCallbacks.clear()
             }
             pendingResolveQueue.clear()
-            isResolving = false
+            if (clearHosts) {
+                resolvedByServiceName.clear()
+                _hosts.value = emptyList()
+            }
         }
+
+        discoveryListener?.let { listener ->
+            runCatching { nsdManager.stopServiceDiscovery(listener) }
+        }
+        discoveryListener = null
 
         multicastLock?.let { lock ->
             runCatching { if (lock.isHeld) lock.release() }
@@ -147,39 +162,49 @@ class HostBrowser(context: Context) {
         _isSearching.value = false
     }
 
-    private fun resolveServiceInfo(serviceInfo: NsdServiceInfo) {
+    private fun isCurrentGeneration(gen: Long): Boolean = synchronized(lock) { gen == browseGeneration }
+
+    private fun resolveServiceInfo(gen: Long, serviceInfo: NsdServiceInfo) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             synchronized(lock) {
+                if (gen != browseGeneration) return
                 if (activeInfoCallbacks.containsKey(serviceInfo.serviceName)) return
+                val serviceName = serviceInfo.serviceName
                 val cb = object : NsdManager.ServiceInfoCallback {
                     override fun onServiceInfoCallbackRegistrationFailed(errorCode: Int) {
-                        Log.w(TAG, "ServiceInfoCallback registration failed: $errorCode")
+                        Log.w(TAG, "ServiceInfoCallback registration failed for $serviceName: $errorCode")
+                        synchronized(lock) {
+                            activeInfoCallbacks.remove(serviceName)
+                        }
                     }
 
                     override fun onServiceUpdated(updated: NsdServiceInfo) {
-                        recordResolved(updated)
+                        recordResolved(gen, updated)
                     }
 
                     override fun onServiceLost() {
                         synchronized(lock) {
-                            resolvedByServiceName.remove(serviceInfo.serviceName)
+                            if (gen != browseGeneration) return
+                            activeInfoCallbacks.remove(serviceName)
+                            resolvedByServiceName.remove(serviceName)
                             publishHostsLocked()
                         }
                     }
 
                     override fun onServiceInfoCallbackUnregistered() = Unit
                 }
-                activeInfoCallbacks[serviceInfo.serviceName] = cb
+                activeInfoCallbacks[serviceName] = cb
                 runCatching {
                     nsdManager.registerServiceInfoCallback(serviceInfo, callbackExecutor, cb)
                 }.onFailure {
-                    activeInfoCallbacks.remove(serviceInfo.serviceName)
+                    activeInfoCallbacks.remove(serviceName)
                     Log.w(TAG, "registerServiceInfoCallback failed: ${it.message}")
                 }
             }
         } else {
             synchronized(lock) {
-                pendingResolveQueue.addLast(serviceInfo)
+                if (gen != browseGeneration) return
+                pendingResolveQueue.addLast(gen to serviceInfo)
                 drainResolveQueueLocked()
             }
         }
@@ -188,32 +213,36 @@ class HostBrowser(context: Context) {
     @Suppress("DEPRECATION")
     private fun drainResolveQueueLocked() {
         if (isResolving) return
-        val next = pendingResolveQueue.pollFirst() ?: return
-        isResolving = true
+        while (pendingResolveQueue.isNotEmpty()) {
+            val (gen, next) = pendingResolveQueue.pollFirst() ?: return
+            if (gen != browseGeneration) continue
+            isResolving = true
 
-        nsdManager.resolveService(next, object : NsdManager.ResolveListener {
-            override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-                Log.w(TAG, "Resolve failed for ${serviceInfo.serviceName}: code $errorCode")
-                synchronized(lock) {
-                    isResolving = false
-                    drainResolveQueueLocked()
+            nsdManager.resolveService(next, object : NsdManager.ResolveListener {
+                override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+                    Log.w(TAG, "Resolve failed for ${serviceInfo.serviceName}: code $errorCode")
+                    synchronized(lock) {
+                        isResolving = false
+                        drainResolveQueueLocked()
+                    }
                 }
-            }
 
-            override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
-                recordResolved(serviceInfo)
-                synchronized(lock) {
-                    isResolving = false
-                    drainResolveQueueLocked()
+                override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
+                    recordResolved(gen, serviceInfo)
+                    synchronized(lock) {
+                        isResolving = false
+                        drainResolveQueueLocked()
+                    }
                 }
-            }
-        })
+            })
+            return
+        }
     }
 
-    private fun recordResolved(serviceInfo: NsdServiceInfo) {
+    private fun recordResolved(gen: Long, serviceInfo: NsdServiceInfo) {
         val address = pickBestAddress(serviceInfo) ?: return
         val port = serviceInfo.port
-        if (port <= 0) return
+        if (port !in 1..65535) return
 
         val attrs = parseAttributes(serviceInfo)
         val hostID = attrs["id"]
@@ -231,8 +260,9 @@ class HostBrowser(context: Context) {
             protocolVersion = version
         )
 
-        Log.i(TAG, "Resolved host: ${host.name} -> ${host.hostAddress}:${host.port} (scanner=${host.scannerName})")
         synchronized(lock) {
+            if (gen != browseGeneration) return
+            Log.i(TAG, "Resolved host: ${host.name} -> ${host.hostAddress}:${host.port} (scanner=${host.scannerName})")
             resolvedByServiceName[serviceInfo.serviceName] = host
             publishHostsLocked()
         }
@@ -247,8 +277,11 @@ class HostBrowser(context: Context) {
         }
         val best = candidates.firstOrNull { it is Inet4Address && !it.isLoopbackAddress }
             ?: candidates.firstOrNull { !it.isLinkLocalAddress && !it.isLoopbackAddress }
+            ?: candidates.firstOrNull { !it.isLoopbackAddress }
             ?: candidates.firstOrNull()
-        return best?.hostAddress?.substringBefore('%')
+        // Keep IPv6 %scope intact for link-local addresses so routing works; strip only if non-link-local
+        val addr = best?.hostAddress ?: return null
+        return if (best.isLinkLocalAddress) addr else addr.substringBefore('%')
     }
 
     private fun parseAttributes(info: NsdServiceInfo): Map<String, String> {

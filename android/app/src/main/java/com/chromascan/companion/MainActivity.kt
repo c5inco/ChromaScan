@@ -2,7 +2,7 @@ package com.chromascan.companion
 
 import android.Manifest
 import android.content.Intent
-import android.content.pm.ActivityInfo
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -27,17 +27,21 @@ class MainActivity : ComponentActivity() {
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ -> }
 
+    private val isDebuggable: Boolean
+        get() = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
         )
-        window.colorMode = ActivityInfo.COLOR_MODE_WIDE_COLOR_GAMUT
 
         store = RemoteSessionStore.getInstance(applicationContext)
         requestNotificationsPermissionIfNeeded()
-        handleLaunchIntent(intent)
+        if (savedInstanceState == null) {
+            handleDebugLaunchIntent(intent)
+        }
 
         setContent {
             ChromaScanTheme {
@@ -48,7 +52,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        handleLaunchIntent(intent)
+        setIntent(intent)
+        handleDebugLaunchIntent(intent)
     }
 
     override fun onStart() {
@@ -61,11 +66,18 @@ class MainActivity : ComponentActivity() {
         store.onAppBackgrounded()
     }
 
-    private fun handleLaunchIntent(intent: Intent?) {
-        if (intent == null) return
+    /**
+     * Debug-only CLI test hook (`am start --es connect_host ... --ei connect_port ...`).
+     * Ignored in release builds and cleared after consumption so configuration changes do not reconnect.
+     */
+    private fun handleDebugLaunchIntent(intent: Intent?) {
+        if (!isDebuggable || intent == null) return
         val host = intent.getStringExtra(EXTRA_CONNECT_HOST)?.trim()
         val port = intent.getIntExtra(EXTRA_CONNECT_PORT, 0)
         val pin = intent.getStringExtra(EXTRA_CONNECT_PIN)?.trim()?.takeIf { it.isNotEmpty() }
+        intent.removeExtra(EXTRA_CONNECT_HOST)
+        intent.removeExtra(EXTRA_CONNECT_PORT)
+        intent.removeExtra(EXTRA_CONNECT_PIN)
         if (!host.isNullOrEmpty() && port in 1..65535) {
             store.connectManual(host = host, port = port, pin = pin)
         }
@@ -129,7 +141,7 @@ private fun ChromaScanCompanionApp(store: RemoteSessionStore) {
                 browseError = browseError,
                 initialManualHost = store.tokenStore.lastManualHost,
                 initialManualPort = store.tokenStore.lastManualPort,
-                onRefreshHosts = { store.browser.start() },
+                onRefreshHosts = { store.browser.start(clearExisting = true) },
                 onConnectHost = store::connect,
                 onConnectManual = { host, port -> store.connectManual(host, port) },
                 onSubmitPin = store::submitPIN,

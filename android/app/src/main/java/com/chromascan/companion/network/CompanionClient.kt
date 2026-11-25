@@ -7,10 +7,12 @@ import com.chromascan.companion.model.CompanionConstants
 import com.chromascan.companion.model.CompanionJson
 import com.chromascan.companion.model.HostMessage
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
+import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -24,33 +26,54 @@ import kotlin.math.pow
 sealed class CompanionTarget {
     abstract val displayName: String
     abstract val tokenKey: String
-    abstract val wsUrl: String
+    abstract val hostAddress: String
+    abstract val port: Int
+
+    fun buildValidatedWsUrl(): String? = buildWsUrl(hostAddress, port)
 
     data class Bonjour(
         val name: String,
-        val hostAddress: String,
-        val port: Int,
+        override val hostAddress: String,
+        override val port: Int,
         val hostID: String?
     ) : CompanionTarget() {
         override val displayName: String get() = name
         override val tokenKey: String get() = hostID ?: "bonjour:$name"
-        override val wsUrl: String get() = buildWsUrl(hostAddress, port)
     }
 
     data class Manual(
-        val host: String,
-        val port: Int
+        override val hostAddress: String,
+        override val port: Int
     ) : CompanionTarget() {
-        override val displayName: String get() = "$host:$port"
-        override val tokenKey: String get() = "manual:$host:$port"
-        override val wsUrl: String get() = buildWsUrl(host, port)
+        override val displayName: String get() = "$hostAddress:$port"
+        override val tokenKey: String get() = "manual:$hostAddress:$port"
     }
 
     companion object {
-        fun buildWsUrl(host: String, port: Int): String {
+        fun buildWsUrl(host: String, port: Int): String? {
+            if (port !in 1..65535) return null
             val clean = host.trim()
-            val formattedHost = if (clean.contains(":") && !clean.startsWith("[")) "[$clean]" else clean
-            return "ws://$formattedHost:$port/"
+                .removePrefix("ws://")
+                .removePrefix("wss://")
+                .removePrefix("http://")
+                .removePrefix("https://")
+                .trimEnd('/')
+            if (clean.isEmpty() || clean.any { it.isWhitespace() || it == '/' || it == '?' || it == '#' }) {
+                return null
+            }
+            val strippedBrackets = if (clean.startsWith("[") && clean.endsWith("]")) {
+                clean.substring(1, clean.length - 1)
+            } else {
+                clean
+            }
+            return runCatching {
+                val httpUrl = HttpUrl.Builder()
+                    .scheme("http")
+                    .host(strippedBrackets)
+                    .port(port)
+                    .build()
+                httpUrl.toString().replaceFirst("http://", "ws://")
+            }.getOrNull()
         }
     }
 }
@@ -73,6 +96,7 @@ class CompanionClient(
     var onStatusChanged: ((ConnectionStatus) -> Unit)? = null
     var onHostMessage: ((HostMessage) -> Unit)? = null
     var onBinaryFrame: ((CompanionBinaryFrame) -> Unit)? = null
+    var onInvalidTarget: ((String) -> Unit)? = null
 
     private val okHttpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -98,29 +122,68 @@ class CompanionClient(
             }
         }
 
-    fun connect(target: CompanionTarget, pin: String? = null) {
+    val activeTarget: CompanionTarget?
+        get() = currentTarget
+
+    fun connect(target: CompanionTarget, pin: String? = null): Boolean {
+        if (target.buildValidatedWsUrl() == null) {
+            onInvalidTarget?.invoke("Invalid host address or port: ${target.displayName}")
+            return false
+        }
         disconnect(clearTarget = false)
         currentTarget = target
-        pendingPIN = pin
+        pendingPIN = pin?.filter { it.isDigit() }?.takeIf { it.length == 6 }
         intentionallyDisconnected = false
         reconnectAttempt = 0
         openConnection(target)
+        return true
+    }
+
+    /**
+     * Updates the resolved Bonjour host address/port (e.g., after Mac relaunch assigns
+     * a new ephemeral port) and triggers an immediate reconnect if currently retrying.
+     */
+    fun updateBonjourEndpoint(hostAddress: String, port: Int) {
+        val current = currentTarget as? CompanionTarget.Bonjour ?: return
+        if (current.hostAddress == hostAddress && current.port == port) return
+        val updated = current.copy(hostAddress = hostAddress, port = port)
+        if (updated.buildValidatedWsUrl() == null) return
+        currentTarget = updated
+        if (!intentionallyDisconnected && status is ConnectionStatus.Reconnecting) {
+            Log.i(TAG, "Updated Bonjour endpoint for ${updated.name} -> $hostAddress:$port; reconnecting immediately")
+            reconnectJob?.cancel()
+            reconnectJob = null
+            reconnectAttempt = 0
+            openConnection(updated)
+        }
     }
 
     fun submitPIN(pin: String) {
-        pendingPIN = pin
+        val clean = pin.filter { it.isDigit() }
+        if (clean.length != 6) return
+        pendingPIN = clean
         if (status == ConnectionStatus.Connected && webSocket != null) {
             send(
                 ClientMessage.Hello(
                     protocolVersion = CompanionConstants.PROTOCOL_VERSION,
                     clientName = clientName,
-                    pin = pin,
+                    pin = clean,
                     authToken = null
                 )
             )
         } else {
             currentTarget?.let { openConnection(it) }
         }
+    }
+
+    /** Clears one-time PIN once authenticated so reconnects always use the persisted authToken. */
+    fun markAuthenticated() {
+        pendingPIN = null
+    }
+
+    /** Clears a rejected PIN so reconnects do not re-submit an invalid PIN. */
+    fun clearPendingPin() {
+        pendingPIN = null
     }
 
     fun saveAuthToken(token: String, hostID: String) {
@@ -156,7 +219,6 @@ class CompanionClient(
         reconnectJob?.cancel()
         reconnectJob = null
         webSocket?.close(1000, "Client disconnect")
-        webSocket?.cancel()
         webSocket = null
         if (clearTarget) {
             currentTarget = null
@@ -165,18 +227,27 @@ class CompanionClient(
         status = ConnectionStatus.Disconnected
     }
 
-    fun send(message: ClientMessage) {
-        val ws = webSocket ?: return
-        if (status != ConnectionStatus.Connected) return
-        try {
+    fun send(message: ClientMessage): Boolean {
+        val ws = webSocket ?: return false
+        if (status != ConnectionStatus.Connected) return false
+        return try {
             val json = CompanionJson.encodeToString<ClientMessage>(message)
             ws.send(json)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to encode/send message $message", e)
+            false
         }
     }
 
     private fun openConnection(target: CompanionTarget) {
+        val wsUrl = target.buildValidatedWsUrl()
+        if (wsUrl == null) {
+            intentionallyDisconnected = true
+            status = ConnectionStatus.Disconnected
+            onInvalidTarget?.invoke("Invalid host address or port: ${target.displayName}")
+            return
+        }
+
         connectionEpoch += 1
         val epoch = connectionEpoch
 
@@ -189,10 +260,15 @@ class CompanionClient(
             ConnectionStatus.Reconnecting(reconnectAttempt)
         }
 
-        Log.i(TAG, "Opening WebSocket to ${target.wsUrl} (attempt=$reconnectAttempt)")
-        val request = Request.Builder()
-            .url(target.wsUrl)
-            .build()
+        Log.i(TAG, "Opening WebSocket to $wsUrl (attempt=$reconnectAttempt)")
+        val request = try {
+            Request.Builder().url(wsUrl).build()
+        } catch (e: IllegalArgumentException) {
+            intentionallyDisconnected = true
+            status = ConnectionStatus.Disconnected
+            onInvalidTarget?.invoke(e.localizedMessage ?: "Invalid WebSocket URL")
+            return
+        }
 
         webSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -218,13 +294,21 @@ class CompanionClient(
             }
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                scope.launch {
-                    if (epoch != connectionEpoch) return@launch
-                    try {
-                        val frame = CompanionBinaryFrame.unpack(bytes.toByteArray())
-                        onBinaryFrame?.invoke(frame)
+                if (bytes.size > CompanionConstants.MAXIMUM_MESSAGE_SIZE) {
+                    Log.w(TAG, "Dropping oversized binary frame (${bytes.size} bytes > ${CompanionConstants.MAXIMUM_MESSAGE_SIZE})")
+                    return
+                }
+                // Unpack off the main thread so large proxy/gallery payloads don't stall UI frames
+                scope.launch(Dispatchers.Default) {
+                    val frame = try {
+                        CompanionBinaryFrame.unpack(bytes.toByteArray())
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to unpack binary frame: ${e.message}")
+                        return@launch
+                    }
+                    scope.launch {
+                        if (epoch != connectionEpoch) return@launch
+                        onBinaryFrame?.invoke(frame)
                     }
                 }
             }
@@ -258,8 +342,8 @@ class CompanionClient(
             ClientMessage.Hello(
                 protocolVersion = CompanionConstants.PROTOCOL_VERSION,
                 clientName = clientName,
-                pin = pin,
-                authToken = if (pin == null) savedToken else null
+                pin = if (savedToken != null && pin == null) null else pin,
+                authToken = savedToken
             )
         )
     }
@@ -282,7 +366,7 @@ class CompanionClient(
         reconnectJob = scope.launch {
             delay(delayMs)
             if (!intentionallyDisconnected && currentTarget != null) {
-                openConnection(target)
+                openConnection(currentTarget ?: target)
             }
         }
     }

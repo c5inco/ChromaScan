@@ -39,7 +39,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.platform.LocalViewConfiguration
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -54,6 +56,7 @@ import com.chromascan.companion.ui.theme.GoogleSansFlexFamily
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
@@ -85,20 +88,23 @@ fun RemoteCanvas(
     tileNormalizedRect: NormalizedCropRect?,
     isLoadingTile: Boolean,
     showCropOverlay: Boolean,
+    isCropEditable: Boolean,
     cropRect: NormalizedCropRect,
     rotation: ScanRotation,
     topContentPadding: Dp = 88.dp,
-    bottomContentPadding: Dp = 118.dp,
+    bottomContentPadding: Dp = 142.dp,
     onCropChanged: (NormalizedCropRect, Boolean) -> Unit,
     onRequestTile: (NormalizedCropRect, Int) -> Unit,
     onClearTile: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
+    val viewConfig = LocalViewConfiguration.current
     val scope = rememberCoroutineScope()
 
     val proxyImage = remember(proxyBitmap) { proxyBitmap.asImageBitmap() }
     val tileImage = remember(tileBitmap) { tileBitmap?.asImageBitmap() }
+    val maskPath = remember { Path().apply { fillType = PathFillType.EvenOdd } }
 
     var viewportSize by remember { mutableStateOf(IntSize.Zero) }
     var zoomScale by remember { mutableFloatStateOf(1f) }
@@ -111,22 +117,23 @@ fun RemoteCanvas(
     var settleJob by remember { mutableStateOf<Job?>(null) }
     var badgeHideJob by remember { mutableStateOf<Job?>(null) }
 
-    // Keep latest callbacks/props accessible inside pointerInput without restarting it
+    // Keep latest callbacks, padding, and props accessible inside pointerInput without stale closures
+    val topPadPx by rememberUpdatedState(with(density) { topContentPadding.toPx() })
+    val sidePadPx = with(density) { 18.dp.toPx() }
+    val bottomPadPx by rememberUpdatedState(with(density) { bottomContentPadding.toPx() })
+    val handleHitRadiusPx = with(density) { 26.dp.toPx() } // 52dp diameter touch target
+    val handleDotRadiusPx = with(density) { 7.5.dp.toPx() }
+    val doubleTapTimeoutMs = viewConfig.doubleTapTimeoutMillis
+
     val currentCrop by rememberUpdatedState(cropRect)
     val currentRotation by rememberUpdatedState(rotation)
     val currentShowCrop by rememberUpdatedState(showCropOverlay)
+    val currentCropEditable by rememberUpdatedState(isCropEditable)
     val currentOnCropChanged by rememberUpdatedState(onCropChanged)
     val currentOnRequestTile by rememberUpdatedState(onRequestTile)
     val currentOnClearTile by rememberUpdatedState(onClearTile)
     val currentTrueW by rememberUpdatedState(if (truePixelWidth > 0) truePixelWidth else proxyBitmap.width)
     val currentProxyW by rememberUpdatedState(proxyBitmap.width)
-
-    // Compute fitted base page rectangle inside viewport (at zoom = 1)
-    val topPadPx = with(density) { topContentPadding.toPx() }
-    val sidePadPx = with(density) { 18.dp.toPx() }
-    val bottomPadPx = with(density) { bottomContentPadding.toPx() }
-    val handleHitRadiusPx = with(density) { 26.dp.toPx() } // 52dp diameter touch target
-    val handleDotRadiusPx = with(density) { 7.5.dp.toPx() }
 
     fun computeBasePageRect(vp: IntSize, imgW: Int, imgH: Int): Rect {
         if (vp.width <= 20 || vp.height <= 20 || imgW <= 0 || imgH <= 0) return Rect.Zero
@@ -152,11 +159,8 @@ fun RemoteCanvas(
         val scaledH = baseRect.height * scale
         val centerX = vp.width * 0.5f
         val centerY = vp.height * 0.5f
-        val baseCenterX = baseRect.center.x
-        val baseCenterY = baseRect.center.y
-
-        val maxDx = max(0f, (scaledW - vp.width) * 0.5f) + kotlin.math.abs(centerX - baseCenterX)
-        val maxDy = max(0f, (scaledH - vp.height) * 0.5f) + kotlin.math.abs(centerY - baseCenterY)
+        val maxDx = max(0f, (scaledW - vp.width) * 0.5f) + abs(centerX - baseRect.center.x)
+        val maxDy = max(0f, (scaledH - vp.height) * 0.5f) + abs(centerY - baseRect.center.y)
         return Offset(
             x = offset.x.coerceIn(-maxDx, maxDx),
             y = offset.y.coerceIn(-maxDy, maxDy)
@@ -245,13 +249,16 @@ fun RemoteCanvas(
         }
     }
 
-    val displayedCrop = activeDragCrop ?: cropRect
-    val basePageRect = computeBasePageRect(viewportSize, proxyBitmap.width, proxyBitmap.height)
-    val pageRect = transformedPageRect(basePageRect, zoomScale, panOffset)
-
     Box(
         modifier = modifier
             .fillMaxSize()
+            .semantics {
+                contentDescription = if (showCropOverlay) {
+                    "Flatbed preview canvas with crop handles"
+                } else {
+                    "Full-resolution scan preview canvas"
+                }
+            }
             .onSizeChanged { viewportSize = it }
             .pointerInput(proxyBitmap.width, proxyBitmap.height) {
                 var lastTapTimeMs = 0L
@@ -262,9 +269,8 @@ fun RemoteCanvas(
                     val baseRect = computeBasePageRect(viewportSize, proxyBitmap.width, proxyBitmap.height)
                     val curPageRect = transformedPageRect(baseRect, zoomScale, panOffset)
 
-                    // Check if single-finger touch hits a crop handle or interior of a sub-crop
                     var dragMode: CropDragMode = CropDragMode.None
-                    if (currentShowCrop && curPageRect.width > 10f && curPageRect.height > 10f) {
+                    if (currentShowCrop && currentCropEditable && curPageRect.width > 10f && curPageRect.height > 10f) {
                         val displayNorm = currentCrop.physicalToDisplay(currentRotation)
                         val selRect = Rect(
                             left = curPageRect.left + displayNorm.minX.toFloat() * curPageRect.width,
@@ -285,40 +291,35 @@ fun RemoteCanvas(
                         firstDown.consume()
                         isDraggingCrop = true
                         var latestCrop = currentCrop
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val activePointers = event.changes.filter { it.pressed }
-                            if (activePointers.isEmpty()) {
-                                currentOnCropChanged(latestCrop, true)
-                                activeDragCrop = null
-                                isDraggingCrop = false
-                                break
-                            }
-                            if (activePointers.size > 1) {
-                                // Second finger arrived -> finish crop drag gracefully
-                                currentOnCropChanged(latestCrop, true)
-                                activeDragCrop = null
-                                isDraggingCrop = false
-                                break
-                            }
-                            val change = activePointers.first()
-                            if (change.positionChanged()) {
-                                change.consume()
-                                val updated = applyCropDrag(
-                                    mode = dragMode,
-                                    pt = change.position,
-                                    pageRect = curPageRect,
-                                    rotation = currentRotation
-                                )
-                                if (updated != null) {
-                                    latestCrop = updated
-                                    activeDragCrop = updated
-                                    currentOnCropChanged(updated, false)
+                        try {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val activePointers = event.changes.filter { it.pressed }
+                                if (activePointers.isEmpty() || activePointers.size > 1) {
+                                    currentOnCropChanged(latestCrop, true)
+                                    break
+                                }
+                                val change = activePointers.first()
+                                if (change.positionChanged()) {
+                                    change.consume()
+                                    val updated = applyCropDrag(
+                                        mode = dragMode,
+                                        pt = change.position,
+                                        pageRect = curPageRect,
+                                        rotation = currentRotation
+                                    )
+                                    if (updated != null) {
+                                        latestCrop = updated
+                                        activeDragCrop = updated
+                                        currentOnCropChanged(updated, false)
+                                    }
                                 }
                             }
+                        } finally {
+                            activeDragCrop = null
+                            isDraggingCrop = false
                         }
                     } else {
-                        // Pinch-zoom, pan, and double-tap handling
                         var moved = false
                         var didTransform = false
                         val startPos = firstDown.position
@@ -330,14 +331,13 @@ fun RemoteCanvas(
                             val pressed = event.changes.filter { it.pressed }
                             if (pressed.isEmpty()) {
                                 val elapsed = System.currentTimeMillis() - downTime
-                                if (!moved && elapsed < 260L) {
+                                if (!moved && elapsed < doubleTapTimeoutMs) {
                                     val sinceLastTap = downTime - lastTapTimeMs
                                     val distLast = hypot(
                                         (startPos.x - lastTapPos.x).toDouble(),
                                         (startPos.y - lastTapPos.y).toDouble()
                                     )
-                                    if (sinceLastTap < 300L && distLast < 96.0) {
-                                        // Double-tap: toggle 1x <-> 1:1
+                                    if (sinceLastTap < doubleTapTimeoutMs && distLast < 96.0) {
                                         if (zoomScale > 1.05f) {
                                             zoomScale = 1f
                                             panOffset = Offset.Zero
@@ -404,7 +404,14 @@ fun RemoteCanvas(
                 }
             }
     ) {
+        // Read zoomScale, panOffset, and activeDragCrop inside DrawScope to avoid recomposing on every gesture frame
         Canvas(modifier = Modifier.fillMaxSize()) {
+            val baseRect = computeBasePageRect(
+                IntSize(size.width.roundToInt(), size.height.roundToInt()),
+                proxyBitmap.width,
+                proxyBitmap.height
+            )
+            val pageRect = transformedPageRect(baseRect, zoomScale, panOffset)
             if (pageRect == Rect.Zero) return@Canvas
 
             // Soft page shadow & white paper backing
@@ -441,6 +448,7 @@ fun RemoteCanvas(
 
             // Draw touch-friendly crop overlay in Preview mode
             if (showCropOverlay && pageRect.width > 10f && pageRect.height > 10f) {
+                val displayedCrop = activeDragCrop ?: cropRect
                 val displayNorm = displayedCrop.physicalToDisplay(rotation)
                 val selRect = Rect(
                     left = pageRect.left + displayNorm.minX.toFloat() * pageRect.width,
@@ -449,13 +457,12 @@ fun RemoteCanvas(
                     bottom = pageRect.top + displayNorm.maxY.toFloat() * pageRect.height
                 )
 
-                // Dim exterior when cropped
+                // Dim exterior when cropped (reusing pre-allocated Path)
                 if (!displayedCrop.isFull) {
-                    val maskPath = Path().apply {
-                        fillType = PathFillType.EvenOdd
-                        addRect(pageRect)
-                        addRect(selRect)
-                    }
+                    maskPath.reset()
+                    maskPath.fillType = PathFillType.EvenOdd
+                    maskPath.addRect(pageRect)
+                    maskPath.addRect(selRect)
                     drawPath(path = maskPath, color = Color.Black.copy(alpha = 0.48f))
                 }
 

@@ -142,8 +142,9 @@ fun RemoteWorkspaceScreen(
                             tileNormalizedRect = state.tileNormalizedRect,
                             isLoadingTile = state.isLoadingTile,
                             showCropOverlay = !showingScan,
+                            isCropEditable = state.isConnected && !snap.isBusy && !state.isAwaitingRotatedProxy,
                             cropRect = snap.cropRect,
-                            rotation = snap.settings.rotation,
+                            rotation = state.proxyRotation,
                             topContentPadding = 88.dp,
                             bottomContentPadding = canvasBottomPad,
                             onCropChanged = onCropChanged,
@@ -196,7 +197,7 @@ fun RemoteWorkspaceScreen(
                             ) {
                                 ElevatedAssistChip(
                                     onClick = onTrimEmptySpace,
-                                    enabled = !snap.isBusy && !(showingScan && snap.isScanTrimmed),
+                                    enabled = state.isConnected && !snap.isBusy && !(showingScan && snap.isScanTrimmed),
                                     shape = RoundedCornerShape(50),
                                     label = { Text("Trim", style = MaterialTheme.typography.labelMedium) },
                                     leadingIcon = {
@@ -219,7 +220,7 @@ fun RemoteWorkspaceScreen(
                                 ) {
                                     ElevatedAssistChip(
                                         onClick = onResetCrop,
-                                        enabled = !snap.isBusy,
+                                        enabled = state.isConnected && !snap.isBusy,
                                         shape = RoundedCornerShape(50),
                                         label = { Text("Full page", style = MaterialTheme.typography.labelMedium) },
                                         leadingIcon = {
@@ -576,7 +577,7 @@ private fun ExpressiveFloatingActionDock(
     onTriggerExport: () -> Unit,
     onOpenControls: () -> Unit
 ) {
-    val ready = snap.selectedScannerID != null && snap.capabilities != null
+    val ready = state.isConnected && snap.selectedScannerID != null && snap.capabilities != null
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -655,12 +656,12 @@ private fun ExpressiveFloatingActionDock(
 
                 IconButton(
                     onClick = onTriggerExport,
-                    enabled = snap.hasScanImage
+                    enabled = state.isConnected && snap.hasScanImage
                 ) {
                     MaterialSymbol(
                         iconRes = R.drawable.ms_download,
                         contentDescription = "Export scan",
-                        tint = if (snap.hasScanImage) {
+                        tint = if (state.isConnected && snap.hasScanImage) {
                             MaterialTheme.colorScheme.primary
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
@@ -679,34 +680,48 @@ private fun ExpressiveFloatingActionDock(
                 }
             }
 
-            ExtendedFloatingActionButton(
-                onClick = { if (ready) onTriggerScan() },
-                containerColor = if (ready) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.surfaceContainerHighest
-                },
-                contentColor = if (ready) {
-                    MaterialTheme.colorScheme.onPrimary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                },
-                shape = RoundedCornerShape(20.dp),
-                icon = {
+            if (ready) {
+                ExtendedFloatingActionButton(
+                    onClick = onTriggerScan,
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    shape = RoundedCornerShape(20.dp),
+                    icon = {
+                        MaterialSymbol(
+                            iconRes = R.drawable.ms_scanner,
+                            contentDescription = null,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    },
+                    text = {
+                        Text(
+                            text = "Scan",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                )
+            } else {
+                FilledTonalButton(
+                    onClick = {},
+                    enabled = false,
+                    shape = RoundedCornerShape(20.dp),
+                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
+                    modifier = Modifier.height(56.dp)
+                ) {
                     MaterialSymbol(
                         iconRes = R.drawable.ms_scanner,
                         contentDescription = null,
                         modifier = Modifier.size(22.dp)
                     )
-                },
-                text = {
+                    Spacer(Modifier.width(10.dp))
                     Text(
                         text = "Scan",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )
                 }
-            )
+            }
         }
     }
 }
@@ -779,6 +794,7 @@ private fun ExpressiveActiveScanCard(
 
                 FilledTonalButton(
                     onClick = onCancelOperation,
+                    enabled = state.isConnected,
                     shape = RoundedCornerShape(50),
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                     colors = ButtonDefaults.filledTonalButtonColors(

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -47,6 +48,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,6 +63,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.chromascan.companion.R
+import com.chromascan.companion.network.CompanionTarget
 import com.chromascan.companion.network.DiscoveredHost
 import com.chromascan.companion.store.AuthPhase
 import com.chromascan.companion.ui.theme.ChromaPalette
@@ -82,10 +85,16 @@ fun PairingScreen(
     onCancelConnection: () -> Unit
 ) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
-    var manualHost by remember { mutableStateOf(initialManualHost) }
-    var manualPort by remember { mutableStateOf(initialManualPort) }
-    var showManualSection by remember { mutableStateOf(false) }
-    var pinInput by remember { mutableStateOf("") }
+    var manualHost by rememberSaveable { mutableStateOf(initialManualHost) }
+    var manualPort by rememberSaveable { mutableStateOf(initialManualPort) }
+    var showManualSection by rememberSaveable { mutableStateOf(false) }
+    var pinInput by rememberSaveable { mutableStateOf("") }
+
+    LaunchedEffect(phase) {
+        if (phase is AuthPhase.NeedsPin && !phase.reason.isNullOrBlank()) {
+            pinInput = ""
+        }
+    }
 
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
@@ -132,6 +141,7 @@ fun PairingScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .consumeWindowInsets(innerPadding)
                 .imePadding(),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -343,7 +353,8 @@ fun PairingScreen(
                                     modifier = Modifier.fillMaxWidth()
                                 )
                                 val parsedPort = manualPort.trim().toIntOrNull()
-                                val canConnect = manualHost.trim().isNotEmpty() && parsedPort != null && parsedPort in 1..65535
+                                val canConnect = parsedPort != null &&
+                                    CompanionTarget.buildWsUrl(manualHost.trim(), parsedPort) != null
                                 Button(
                                     onClick = {
                                         if (parsedPort != null) {
