@@ -58,7 +58,7 @@ final class ScanSessionEngine {
     private(set) var viewMode: CanvasViewMode = .preview
     private(set) var isBusy: Bool = false
     private(set) var activeOperation: CompanionOperation?
-    private(set) var statusText: String = "Searching for Wi-Fi scanners…"
+    private(set) var statusText: String = "Searching for scanners…"
     private(set) var isErrorStatus: Bool = false
     private(set) var outputPreviewSummary: String = ""
     private(set) var lastSavedURL: URL?
@@ -85,6 +85,8 @@ final class ScanSessionEngine {
     private var activePowerActivity: NSObjectProtocol?
     private var previewBufferID = UUID()
     private var scanBufferID = UUID()
+    private var capabilityLoadGeneration: UInt64 = 0
+    private var needsSelectionReconcileAfterBusy = false
 
     private var observers: [UUID: @MainActor (SessionEngineEvent) -> Void] = [:]
 
@@ -118,7 +120,7 @@ final class ScanSessionEngine {
 
     init(
         preferences: AppPreferences = AppPreferences(),
-        browser: ScannerBrowserProtocol = BonjourScannerBrowser(),
+        browser: ScannerBrowserProtocol = CompositeScannerBrowser(),
         client: ESCLClientProtocol = ESCLClient()
     ) {
         self.preferences = preferences
@@ -217,7 +219,7 @@ final class ScanSessionEngine {
     // MARK: - Discovery & Scanner Selection
 
     func startDiscovery() {
-        statusText = "Searching for Wi-Fi scanners…"
+        statusText = "Searching for scanners…"
         isErrorStatus = false
         browser.start()
         broadcastSnapshot()
@@ -228,10 +230,12 @@ final class ScanSessionEngine {
     }
 
     func refreshScanners() {
+        // Never interrupt an active scan/preview/export by restarting discovery.
+        guard !isBusy else { return }
         if let scanner = selectedScanner {
             loadCapabilities(for: scanner)
         }
-        browser.start()
+        browser.refresh()
     }
 
     func selectScanner(id: String) {
@@ -261,10 +265,23 @@ final class ScanSessionEngine {
 
     private func handleDiscoveredScanners(_ found: [DiscoveredScanner]) {
         let prevID = selectedScannerID
+        let prevSelected = selectedScanner
         self.scanners = found
 
-        if let prevID, found.contains(where: { $0.id == prevID }) {
-            // Keep existing selection
+        if let prevID, let currentSelected = found.first(where: { $0.id == prevID }) {
+            // Keep existing selection; if its endpoint URL changed (e.g. USB bridge -> macOS ippusbd
+            // port handoff or port refresh), reload capabilities once idle.
+            if prevSelected?.baseURL != currentSelected.baseURL {
+                if isBusy {
+                    needsSelectionReconcileAfterBusy = true
+                } else {
+                    loadCapabilities(for: currentSelected)
+                }
+            }
+        } else if isBusy {
+            // Never disrupt an in-flight scan/preview if a cable is plugged/unplugged mid-operation,
+            // but mark for immediate reconciliation once the active operation finishes.
+            needsSelectionReconcileAfterBusy = true
         } else if selectedScannerID == nil, let first = found.first {
             selectedScannerID = first.id
             loadCapabilities(for: first)
@@ -272,10 +289,8 @@ final class ScanSessionEngine {
             selectedScannerID = nil
             capabilities = nil
             scannerStatus = nil
-            if !isBusy {
-                statusText = "No Wi-Fi scanners found"
-                isErrorStatus = false
-            }
+            statusText = "No scanners found"
+            isErrorStatus = false
         } else if let first = found.first {
             selectedScannerID = first.id
             capabilities = nil
@@ -286,7 +301,35 @@ final class ScanSessionEngine {
         broadcastSnapshot()
     }
 
+    private func reconcileSelectionIfNeededAfterBusy() {
+        guard !isBusy, needsSelectionReconcileAfterBusy else { return }
+        needsSelectionReconcileAfterBusy = false
+
+        if let selID = selectedScannerID,
+           let current = scanners.first(where: { $0.id == selID }) {
+            // Selected scanner still exists (e.g. its USB port changed mid-scan) -> refresh capabilities
+            loadCapabilities(for: current)
+        } else if let first = scanners.first {
+            selectedScannerID = first.id
+            capabilities = nil
+            scannerStatus = nil
+            broadcastSnapshot()
+            loadCapabilities(for: first)
+        } else {
+            selectedScannerID = nil
+            capabilities = nil
+            scannerStatus = nil
+            statusText = "No scanners found"
+            isErrorStatus = false
+            broadcastSnapshot()
+        }
+    }
+
     private func loadCapabilities(for scanner: DiscoveredScanner) {
+        capabilityLoadGeneration &+= 1
+        let requestGen = capabilityLoadGeneration
+        let targetURL = scanner.baseURL
+
         if !isBusy {
             statusText = "Connecting to \(scanner.displayTitle)…"
             isErrorStatus = false
@@ -295,10 +338,21 @@ final class ScanSessionEngine {
         Task { [weak self] in
             guard let self else { return }
             do {
-                async let capsTask = client.fetchCapabilities(from: scanner)
-                async let statusTask = client.fetchStatus(from: scanner)
-                let (caps, status) = try await (capsTask, statusTask)
-                guard self.selectedScannerID == scanner.id else { return }
+                let caps: ScannerCapabilities
+                let status: ScannerStatus
+                if scanner.transport == .usb {
+                    // Over IPP-USB, run initial capabilities + status sequentially on a single
+                    // USB bulk interface so firmware / macOS ippusbd never stalls a secondary slot.
+                    caps = try await client.fetchCapabilities(from: scanner)
+                    status = try await client.fetchStatus(from: scanner)
+                } else {
+                    async let capsTask = client.fetchCapabilities(from: scanner)
+                    async let statusTask = client.fetchStatus(from: scanner)
+                    (caps, status) = try await (capsTask, statusTask)
+                }
+                guard self.capabilityLoadGeneration == requestGen,
+                      self.selectedScannerID == scanner.id,
+                      self.selectedScanner?.baseURL == targetURL else { return }
                 self.capabilities = caps
                 self.scannerStatus = status
                 self.reconcileSettingsWithCapabilities(caps)
@@ -306,12 +360,15 @@ final class ScanSessionEngine {
                     self.platenAspectRatio = Double(platen.maxWidth) / Double(platen.maxHeight)
                 }
                 if !self.isBusy {
-                    self.statusText = "Ready · \(caps.makeAndModel) (\(status.state))"
+                    let transportBadge = scanner.transport == .usb ? " · USB" : ""
+                    self.statusText = "Ready · \(caps.makeAndModel)\(transportBadge) (\(status.state))"
                     self.isErrorStatus = false
                 }
                 self.broadcastSnapshot()
             } catch {
-                guard self.selectedScannerID == scanner.id else { return }
+                guard self.capabilityLoadGeneration == requestGen,
+                      self.selectedScannerID == scanner.id,
+                      self.selectedScanner?.baseURL == targetURL else { return }
                 self.capabilities = nil
                 self.scannerStatus = nil
                 if !self.isBusy {
@@ -741,7 +798,10 @@ final class ScanSessionEngine {
 
         activeTask = Task { [weak self] in
             guard let self else { return }
-            defer { self.endPowerAssertion() }
+            defer {
+                self.endPowerAssertion()
+                self.reconcileSelectionIfNeededAfterBusy()
+            }
             do {
                 let download = try await self.client.performScan(scanner: scanner, request: request) { [weak self] recv, expected in
                     let elapsed = CFAbsoluteTimeGetCurrent() - startTime
@@ -941,7 +1001,10 @@ final class ScanSessionEngine {
 
         activeTask = Task { [weak self] in
             guard let self else { return }
-            defer { self.endPowerAssertion() }
+            defer {
+                self.endPowerAssertion()
+                self.reconcileSelectionIfNeededAfterBusy()
+            }
             do {
                 let (fullCG, fileSize) = try await Task.detached(priority: .userInitiated) {
                     let cgImg: CGImage

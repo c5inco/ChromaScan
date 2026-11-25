@@ -3,6 +3,12 @@ import CoreGraphics
 
 // MARK: - Discovered Scanner
 
+enum ScannerTransport: String, Codable, Hashable, Sendable {
+    case wifi = "wifi"
+    case usb = "usb"
+    case manual = "manual"
+}
+
 struct DiscoveredScanner: Identifiable, Hashable, Codable, Sendable {
     let id: String
     let name: String
@@ -12,6 +18,64 @@ struct DiscoveredScanner: Identifiable, Hashable, Codable, Sendable {
     let rootPath: String
     let modelName: String?
     let uuid: String?
+    let transport: ScannerTransport
+    let serialNumber: String?
+    let usbLocationID: UInt32?
+
+    init(
+        id: String,
+        name: String,
+        host: String,
+        port: Int,
+        useTLS: Bool,
+        rootPath: String,
+        modelName: String?,
+        uuid: String?,
+        transport: ScannerTransport = .wifi,
+        serialNumber: String? = nil,
+        usbLocationID: UInt32? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.host = host
+        self.port = port
+        self.useTLS = useTLS
+        self.rootPath = rootPath
+        self.modelName = modelName
+        self.uuid = uuid
+        self.transport = transport
+        self.serialNumber = serialNumber
+        self.usbLocationID = usbLocationID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case host
+        case port
+        case useTLS
+        case rootPath
+        case modelName
+        case uuid
+        case transport
+        case serialNumber
+        case usbLocationID
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(String.self, forKey: .id)
+        self.name = try c.decode(String.self, forKey: .name)
+        self.host = try c.decode(String.self, forKey: .host)
+        self.port = try c.decode(Int.self, forKey: .port)
+        self.useTLS = try c.decode(Bool.self, forKey: .useTLS)
+        self.rootPath = try c.decode(String.self, forKey: .rootPath)
+        self.modelName = try c.decodeIfPresent(String.self, forKey: .modelName)
+        self.uuid = try c.decodeIfPresent(String.self, forKey: .uuid)
+        self.transport = try c.decodeIfPresent(ScannerTransport.self, forKey: .transport) ?? .wifi
+        self.serialNumber = try c.decodeIfPresent(String.self, forKey: .serialNumber)
+        self.usbLocationID = try c.decodeIfPresent(UInt32.self, forKey: .usbLocationID)
+    }
 
     var baseURL: URL {
         let scheme = useTLS ? "https" : "http"
@@ -22,10 +86,30 @@ struct DiscoveredScanner: Identifiable, Hashable, Codable, Sendable {
     }
 
     var displayTitle: String {
-        if let modelName, !modelName.isEmpty, modelName != name {
-            return name
+        if transport == .usb, !name.localizedCaseInsensitiveContains("(USB)") {
+            return "\(name) (USB)"
         }
         return name
+    }
+
+    /// Formats a clean USB scanner display name like "HP OfficeJet 3830 series (USB)"
+    /// without duplicating the vendor prefix if the product string already includes it.
+    static func usbDisplayName(vendor: String?, product: String?) -> String {
+        let cleanVendor = vendor?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let cleanProduct = product?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let base: String
+        if !cleanProduct.isEmpty {
+            if !cleanVendor.isEmpty && !cleanProduct.lowercased().hasPrefix(cleanVendor.lowercased()) {
+                base = "\(cleanVendor) \(cleanProduct)"
+            } else {
+                base = cleanProduct
+            }
+        } else if !cleanVendor.isEmpty {
+            base = "\(cleanVendor) USB Scanner"
+        } else {
+            base = "USB eSCL Scanner"
+        }
+        return base.localizedCaseInsensitiveContains("(USB)") ? base : "\(base) (USB)"
     }
 }
 

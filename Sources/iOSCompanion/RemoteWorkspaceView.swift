@@ -20,7 +20,9 @@ struct RemoteWorkspaceView: View {
                 .presentationDragIndicator(.visible)
         }
         .confirmationDialog("Mac Host: \(hostName)", isPresented: $showDisconnectConfirm, titleVisibility: .visible) {
-            Button("Refresh Scanners") { store.refreshScanners() }
+            if store.snapshot?.isBusy != true {
+                Button("Refresh Scanners") { store.refreshScanners() }
+            }
             Button("Disconnect", role: .destructive) { store.disconnect() }
             Button("Cancel", role: .cancel) {}
         }
