@@ -16,6 +16,18 @@ import kotlin.math.roundToInt
 // MARK: - Discovered Scanner
 
 @Serializable
+enum class ScannerTransport {
+    @SerialName("wifi")
+    WIFI,
+
+    @SerialName("usb")
+    USB,
+
+    @SerialName("manual")
+    MANUAL
+}
+
+@Serializable
 data class DiscoveredScanner(
     val id: String,
     val name: String,
@@ -24,9 +36,17 @@ data class DiscoveredScanner(
     val useTLS: Boolean,
     val rootPath: String,
     val modelName: String? = null,
-    val uuid: String? = null
+    val uuid: String? = null,
+    val transport: ScannerTransport = ScannerTransport.WIFI,
+    val serialNumber: String? = null,
+    val usbLocationID: Long? = null
 ) {
-    val displayTitle: String get() = name
+    val displayTitle: String
+        get() = if (transport == ScannerTransport.USB && !name.contains("(USB)", ignoreCase = true)) {
+            "$name (USB)"
+        } else {
+            name
+        }
 }
 
 // MARK: - eSCL Capabilities

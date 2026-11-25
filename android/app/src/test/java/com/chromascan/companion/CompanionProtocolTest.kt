@@ -3,6 +3,7 @@ package com.chromascan.companion
 import com.chromascan.companion.model.CanvasViewMode
 import com.chromascan.companion.model.ClientMessage
 import com.chromascan.companion.model.ColorProfileMode
+import com.chromascan.companion.model.DiscoveredScanner
 import com.chromascan.companion.model.CompanionBinaryFrame
 import com.chromascan.companion.model.CompanionBinaryFrameException
 import com.chromascan.companion.model.CompanionConstants
@@ -15,6 +16,7 @@ import com.chromascan.companion.model.NormalizedCropRect
 import com.chromascan.companion.model.OutputFormat
 import com.chromascan.companion.model.ScanRotation
 import com.chromascan.companion.model.ScanSettingsPatch
+import com.chromascan.companion.model.ScannerTransport
 import com.chromascan.companion.model.SessionSnapshot
 import com.chromascan.companion.network.CompanionTarget
 import com.chromascan.companion.store.RemoteSessionStore
@@ -207,5 +209,40 @@ class CompanionProtocolTest {
             requestID = 0L,
             payload = byteArrayOf(1)
         ).pack()
+    }
+
+    @Test
+    fun discoveredScannerDecodesUsbAndDefaultsToWifi() {
+        val usbJson = """
+            {
+              "id": "usb-1",
+              "name": "HP OfficeJet 3830 series",
+              "host": "127.0.0.1",
+              "port": 54321,
+              "useTLS": false,
+              "rootPath": "eSCL",
+              "transport": "usb",
+              "serialNumber": "CN123",
+              "usbLocationID": 33685504
+            }
+        """.trimIndent()
+        val usbScanner = CompanionJson.decodeFromString<DiscoveredScanner>(usbJson)
+        assertEquals(ScannerTransport.USB, usbScanner.transport)
+        assertEquals("HP OfficeJet 3830 series (USB)", usbScanner.displayTitle)
+        assertEquals(33685504L, usbScanner.usbLocationID)
+
+        val legacyWifiJson = """
+            {
+              "id": "wifi-1",
+              "name": "HP OfficeJet 3830",
+              "host": "192.168.4.50",
+              "port": 8080,
+              "useTLS": false,
+              "rootPath": "eSCL"
+            }
+        """.trimIndent()
+        val wifiScanner = CompanionJson.decodeFromString<DiscoveredScanner>(legacyWifiJson)
+        assertEquals(ScannerTransport.WIFI, wifiScanner.transport)
+        assertEquals("HP OfficeJet 3830", wifiScanner.displayTitle)
     }
 }

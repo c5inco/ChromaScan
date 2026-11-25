@@ -75,6 +75,7 @@ import com.chromascan.companion.model.ScanInputSource
 import com.chromascan.companion.model.ScanIntent
 import com.chromascan.companion.model.ScanRotation
 import com.chromascan.companion.model.ScanSettingsPatch
+import com.chromascan.companion.model.ScannerTransport
 import com.chromascan.companion.model.SessionSnapshot
 import com.chromascan.companion.model.TransferFormat
 import com.chromascan.companion.store.RemoteUiState
@@ -436,18 +437,46 @@ private fun ScannerSection(
     ExpressiveSectionCard(title = "Scanner", iconRes = R.drawable.ms_scanner) {
         if (snap.scanners.isEmpty()) {
             Text(
-                text = "No Wi-Fi scanners found on Mac",
+                text = "No scanners found on Mac",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         } else {
+            val selected = snap.selectedScanner
+            val transportIcon = when (selected?.transport) {
+                ScannerTransport.USB -> R.drawable.ms_usb
+                else -> R.drawable.ms_wifi
+            }
             ExposedDropdownField(
                 label = "Active scanner",
-                selectedLabel = snap.selectedScanner?.displayTitle ?: "Select scanner",
+                selectedLabel = selected?.displayTitle ?: "Select scanner",
                 options = snap.scanners.map { it.id to it.displayTitle },
                 enabled = !snap.isBusy,
                 onSelected = onSelectScanner
             )
+            if (selected != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    MaterialSymbol(
+                        iconRes = transportIcon,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = when (selected.transport) {
+                            ScannerTransport.USB -> "Connected via Direct USB"
+                            ScannerTransport.MANUAL -> "Manual IP (${selected.host}:${selected.port})"
+                            ScannerTransport.WIFI -> "Connected via Wi-Fi"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
         }
 
         snap.scannerStatus?.let { status ->
