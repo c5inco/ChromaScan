@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import OSLog
 import CoreGraphics
 
 struct ConnectedCompanionClient: Identifiable, Equatable, Sendable {
@@ -8,6 +9,8 @@ struct ConnectedCompanionClient: Identifiable, Equatable, Sendable {
     let connectedAt: Date
     let isAuthenticated: Bool
 }
+
+private let connectionLog = Logger(subsystem: "com.chromascan.connection", category: "host")
 
 /// WebSocket + Bonjour (`_chromascan._tcp`) server running on the Mac Studio host.
 /// Bridges authenticated iPhone Companion clients to `ScanSessionEngine`.
@@ -214,6 +217,7 @@ final class CompanionServer {
     private func acceptConnection(_ connection: NWConnection) {
         let session = ClientSession(connection: connection, queue: listenerQueue)
         sessions[session.id] = session
+        connectionLog.notice("Accepted session \(session.id, privacy: .public)")
 
         session.onTextMessage = { [weak self, weak session] data in
             guard let self, let session else { return }
@@ -221,6 +225,7 @@ final class CompanionServer {
         }
         session.onDisconnected = { [weak self, weak session] in
             guard let self, let session else { return }
+            connectionLog.notice("Closed session \(session.id, privacy: .public)")
             self.sessions.removeValue(forKey: session.id)
             self.onStateChanged?()
         }
@@ -244,6 +249,7 @@ final class CompanionServer {
                 return
             }
 
+            connectionLog.notice("Received hello for session \(session.id, privacy: .public)")
             let trimmedName = clientName.trimmingCharacters(in: .whitespacesAndNewlines)
             session.clientName = trimmedName.isEmpty ? "iPhone Companion" : trimmedName
 
@@ -292,6 +298,7 @@ final class CompanionServer {
     }
 
     private func completeAuthentication(for session: ClientSession, token: String) {
+        connectionLog.notice("Authenticated session \(session.id, privacy: .public)")
         session.isAuthenticated = true
         session.authToken = token
         let snapshot = engine.makeSnapshot()
@@ -553,14 +560,18 @@ private final class ClientSession {
         guard !isClosed else { return }
         let meta = NWProtocolWebSocket.Metadata(opcode: .text)
         let context = NWConnection.ContentContext(identifier: "text", metadata: [meta])
-        connection.send(content: data, contentContext: context, isComplete: true, completion: .contentProcessed { _ in })
+        connection.send(content: data, contentContext: context, isComplete: true, completion: .contentProcessed { error in
+            if let error { connectionLog.error("Send failed: \(error.localizedDescription, privacy: .public)") }
+        })
     }
 
     func sendBinary(_ data: Data) {
         guard !isClosed else { return }
         let meta = NWProtocolWebSocket.Metadata(opcode: .binary)
         let context = NWConnection.ContentContext(identifier: "binary", metadata: [meta])
-        connection.send(content: data, contentContext: context, isComplete: true, completion: .contentProcessed { _ in })
+        connection.send(content: data, contentContext: context, isComplete: true, completion: .contentProcessed { error in
+            if let error { connectionLog.error("Send failed: \(error.localizedDescription, privacy: .public)") }
+        })
     }
 
     private func receiveNext() {
@@ -568,7 +579,8 @@ private final class ClientSession {
         connection.receiveMessage { [weak self] data, context, _, error in
             Task { @MainActor [weak self] in
                 guard let self, !self.isClosed else { return }
-                if error != nil {
+                if let error {
+                    connectionLog.error("Session \(self.id, privacy: .public) receive failed: \(error.localizedDescription, privacy: .public)")
                     self.notifyDisconnected()
                     return
                 }

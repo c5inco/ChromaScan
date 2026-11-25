@@ -1,6 +1,9 @@
 import Foundation
 import Network
+import OSLog
 import Security
+
+private let connectionLog = Logger(subsystem: "com.chromascan.connection", category: "client")
 
 // MARK: - Keychain Token Storage
 
@@ -209,7 +212,9 @@ final class CompanionClient {
               let data = try? jsonEncoder.encode(message) else { return }
         let meta = NWProtocolWebSocket.Metadata(opcode: .text)
         let ctx = NWConnection.ContentContext(identifier: "text", metadata: [meta])
-        connection.send(content: data, contentContext: ctx, isComplete: true, completion: .contentProcessed { _ in })
+        connection.send(content: data, contentContext: ctx, isComplete: true, completion: .contentProcessed { error in
+            if let error { connectionLog.error("Send failed: \(error.localizedDescription, privacy: .public)") }
+        })
     }
 
     // MARK: - Internals
@@ -232,6 +237,8 @@ final class CompanionClient {
         params.includePeerToPeer = true
         params.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
 
+        let attemptID = UUID()
+        connectionLog.notice("Opening connection \(attemptID, privacy: .public)")
         let conn = NWConnection(to: target.nwEndpoint, using: params)
         self.connection = conn
         status = reconnectAttempt == 0 ? .connecting : .reconnecting(attempt: reconnectAttempt)
@@ -239,6 +246,7 @@ final class CompanionClient {
         conn.stateUpdateHandler = { [weak self, weak conn] state in
             Task { @MainActor [weak self] in
                 guard let self, let conn, self.connection === conn else { return }
+                connectionLog.notice("Connection \(attemptID, privacy: .public) state: \(String(describing: state), privacy: .public)")
                 switch state {
                 case .ready:
                     self.reconnectAttempt = 0
@@ -263,6 +271,7 @@ final class CompanionClient {
     }
 
     private func sendHello(for target: CompanionTarget) {
+        connectionLog.notice("Sending hello")
         let savedToken = tokenStore.token(for: target.tokenKey)
         send(.hello(
             protocolVersion: CompanionConstants.protocolVersion,
@@ -276,7 +285,8 @@ final class CompanionClient {
         conn.receiveMessage { [weak self, weak conn] data, context, _, error in
             Task { @MainActor [weak self] in
                 guard let self, let conn, self.connection === conn else { return }
-                if error != nil {
+                if let error {
+                    connectionLog.error("Receive failed: \(error.localizedDescription, privacy: .public)")
                     self.handleDrop()
                     return
                 }
@@ -285,7 +295,14 @@ final class CompanionClient {
                     switch wsMeta.opcode {
                     case .text:
                         if let data, let msg = try? self.jsonDecoder.decode(HostMessage.self, from: data) {
+                            switch msg {
+                            case .welcome: connectionLog.notice("Received welcome")
+                            case .authRequired: connectionLog.notice("Host requested pairing")
+                            default: break
+                            }
                             self.onHostMessage?(msg)
+                        } else {
+                            connectionLog.error("Could not decode host text frame")
                         }
                     case .binary:
                         if let data, let frame = try? CompanionBinaryFrame.unpack(data) {
