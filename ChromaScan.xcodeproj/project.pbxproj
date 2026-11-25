@@ -10,10 +10,12 @@
 		011F56D29AC65B386A49B6CC /* CompanionProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACA80DFF7134A8F9353D758D /* CompanionProtocolTests.swift */; };
 		0154233DA50988DB0968F645 /* AppPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC908B070D72FD1B449890DF /* AppPreferences.swift */; };
 		0648D61225A83EF93855A2AB /* CompanionServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1849ED5E95E3BBD516425D8 /* CompanionServer.swift */; };
+		0C9BD33BE100D8377896AA98 /* WidgetsAssets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B8621E21392A0CFD72994CC0 /* WidgetsAssets.xcassets */; };
 		11FD81D50B61DC27E7D4213F /* ChromaScanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28B7DDC16C1A43320CD832EA /* ChromaScanTests.swift */; };
 		1D883079C562503A19D06B64 /* ScanLiveActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 819787D98445E80E503763B2 /* ScanLiveActivityAttributes.swift */; };
 		29A07F96D77C65D903F68939 /* RemoteCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D561A0EB2551C5F08C66BB1 /* RemoteCanvasView.swift */; };
 		2AFECF505E34937F5183E306 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D1C6303D0EB2670D0032443 /* Models.swift */; };
+		2B7603DE5F73CA9735D7BAEA /* ChromaTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62C4973A2E2078DB3ED2373D /* ChromaTheme.swift */; };
 		30F36BD3E7DB48827ABF656E /* ScanSessionEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7923524F2BBDBCC3B11F02E7 /* ScanSessionEngineTests.swift */; };
 		41309C77EE80B6B07D890901 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4A9DF072E7C165CCFC6E3DF /* PairingView.swift */; };
 		415E94AE39803C647D8E0775 /* MainWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A6C658899A253C7E75AA58D /* MainWindowController.swift */; };
@@ -25,9 +27,11 @@
 		60DE54F75DFB60592467EBA2 /* CompanionIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4F61D67F19D186B07A71C62 /* CompanionIntegrationTests.swift */; };
 		6531359E2300EA7F344530F6 /* ESCLXMLParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D7050506F4EE0F1C24D2F2B /* ESCLXMLParser.swift */; };
 		6CEAD245E8AEBF410FA257C4 /* RemoteSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72593C77880160F6004A175D /* RemoteSessionStore.swift */; };
+		759EA8EB0F0C849249603614 /* ChromaTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62C4973A2E2078DB3ED2373D /* ChromaTheme.swift */; };
 		7F118CECF60D4FC01007862E /* ScanLiveActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE74C265F1B0ACF8544672BA /* ScanLiveActivityManager.swift */; };
 		8B911ECF48746BC1258E8FAE /* ChromaScanRemoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73346CA0F792B6BB11013BEA /* ChromaScanRemoteApp.swift */; };
 		9788333B17855C7A80EF872E /* InspectorViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 002E96AAA2062918C85A0069 /* InspectorViewController.swift */; };
+		9E161131CA15C3932CC11C77 /* ChromaTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62C4973A2E2078DB3ED2373D /* ChromaTheme.swift */; };
 		A5EC77868953C56AFE7FB4DB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13AAE8EB20CC1850E90EA965 /* Assets.xcassets */; };
 		AA2F6257A38EC92B2108D141 /* CompanionPopoverViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16E3F168FEE319DDE0BA2582 /* CompanionPopoverViewController.swift */; };
 		AA6565A91F0EE99D2B0EBAD2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13AAE8EB20CC1850E90EA965 /* Assets.xcassets */; };
@@ -108,6 +112,7 @@
 		402CE49A4AC2D4FC925AEB05 /* ChromaScanRemoteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromaScanRemoteTests.swift; sourceTree = "<group>"; };
 		47B4A2AA2D7C02B03B7C4881 /* ChromaScanRemoteTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ChromaScanRemoteTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5AA3D80B00290F84EDA6A08C /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		62C4973A2E2078DB3ED2373D /* ChromaTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromaTheme.swift; sourceTree = "<group>"; };
 		6BD54F5AA3038E12A62DBAC5 /* ChromaScanRemote.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = ChromaScanRemote.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		72593C77880160F6004A175D /* RemoteSessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSessionStore.swift; sourceTree = "<group>"; };
 		73346CA0F792B6BB11013BEA /* ChromaScanRemoteApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromaScanRemoteApp.swift; sourceTree = "<group>"; };
@@ -120,6 +125,7 @@
 		AA1EB34041D3A58F462DEC8D /* ImagePipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImagePipeline.swift; sourceTree = "<group>"; };
 		ACA80DFF7134A8F9353D758D /* CompanionProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionProtocolTests.swift; sourceTree = "<group>"; };
 		AE74C265F1B0ACF8544672BA /* ScanLiveActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanLiveActivityManager.swift; sourceTree = "<group>"; };
+		B8621E21392A0CFD72994CC0 /* WidgetsAssets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = WidgetsAssets.xcassets; sourceTree = "<group>"; };
 		BD0542B5FF0A3B6D4F003D16 /* ChromaScanWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = ChromaScanWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		D2771DBF41200CE845EE6B6F /* RemoteControlsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteControlsSheet.swift; sourceTree = "<group>"; };
 		D2C164A02E047BE51616C98A /* CompanionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionClient.swift; sourceTree = "<group>"; };
@@ -138,6 +144,7 @@
 		06AB397FA7837600E45B08DC /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				62C4973A2E2078DB3ED2373D /* ChromaTheme.swift */,
 				144640D0594240C6D8FD1800 /* CompanionProtocol.swift */,
 				AA1EB34041D3A58F462DEC8D /* ImagePipeline.swift */,
 				7D1C6303D0EB2670D0032443 /* Models.swift */,
@@ -196,6 +203,7 @@
 			isa = PBXGroup;
 			children = (
 				13AAE8EB20CC1850E90EA965 /* Assets.xcassets */,
+				B8621E21392A0CFD72994CC0 /* WidgetsAssets.xcassets */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -324,6 +332,7 @@
 			buildConfigurationList = 9ECEA0A40A7AB7953954DFA9 /* Build configuration list for PBXNativeTarget "ChromaScanWidgets" */;
 			buildPhases = (
 				BD39A41F3F83B2731AB6F5E5 /* Sources */,
+				F7A43B8861D4D69EDCDAF665 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -425,6 +434,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F7A43B8861D4D69EDCDAF665 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0C9BD33BE100D8377896AA98 /* WidgetsAssets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -452,6 +469,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				8B911ECF48746BC1258E8FAE /* ChromaScanRemoteApp.swift in Sources */,
+				9E161131CA15C3932CC11C77 /* ChromaTheme.swift in Sources */,
 				B4EE293F9286CE9D44B5C202 /* CompanionClient.swift in Sources */,
 				B546D55F3440DDD4FD633D0A /* CompanionProtocol.swift in Sources */,
 				AEC065521EBB177332590A42 /* HostBrowser.swift in Sources */,
@@ -476,6 +494,7 @@
 				B24CDE02159825DD12076450 /* AppDelegate.swift in Sources */,
 				0154233DA50988DB0968F645 /* AppPreferences.swift in Sources */,
 				4DE06D4A4DC15298827ADB24 /* BonjourScannerBrowser.swift in Sources */,
+				759EA8EB0F0C849249603614 /* ChromaTheme.swift in Sources */,
 				AA2F6257A38EC92B2108D141 /* CompanionPopoverViewController.swift in Sources */,
 				AAC3792122EC81DBD3F873DA /* CompanionProtocol.swift in Sources */,
 				0648D61225A83EF93855A2AB /* CompanionServer.swift in Sources */,
@@ -498,6 +517,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C9FA8F13E0AF5ED71CCEBE83 /* ChromaScanWidgetsBundle.swift in Sources */,
+				2B7603DE5F73CA9735D7BAEA /* ChromaTheme.swift in Sources */,
 				1D883079C562503A19D06B64 /* ScanLiveActivityAttributes.swift in Sources */,
 				AE2269F5B8BE9A74D4082068 /* ScanLiveActivityWidget.swift in Sources */,
 			);
@@ -593,6 +613,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Resources/ChromaScanRemote.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				DEVELOPMENT_TEAM = FXB7YX3ZD4;
@@ -732,6 +753,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "-";
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_HARDENED_RUNTIME = NO;
@@ -766,6 +788,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Resources/ChromaScanRemote.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				DEVELOPMENT_TEAM = FXB7YX3ZD4;
@@ -788,6 +811,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "-";
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_HARDENED_RUNTIME = NO;

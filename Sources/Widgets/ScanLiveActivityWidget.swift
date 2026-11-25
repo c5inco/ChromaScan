@@ -11,10 +11,13 @@ struct ScanLiveActivityWidget: Widget {
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    HStack(spacing: 6) {
-                        phaseIcon(for: context.state.phase)
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(phaseTint(for: context.state.phase))
+                    HStack(spacing: 7) {
+                        PigmentPassBadgeView(
+                            phase: context.state.phase,
+                            progress: context.state.progress,
+                            size: 28,
+                            cornerRadius: 7
+                        )
                         Text("\(context.attributes.resolutionDPI) DPI")
                             .font(.caption.weight(.semibold).monospacedDigit())
                             .foregroundStyle(.secondary)
@@ -36,8 +39,7 @@ struct ScanLiveActivityWidget: Widget {
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 6) {
                         if let progress = context.state.progress, !context.state.isTerminal {
-                            ProgressView(value: progress)
-                                .tint(phaseTint(for: context.state.phase))
+                            PigmentProgressBar(progress: progress)
                         }
 
                         HStack(spacing: 8) {
@@ -69,13 +71,11 @@ struct ScanLiveActivityWidget: Widget {
                     .padding(.bottom, 2)
                 }
             } compactLeading: {
-                phaseIcon(for: context.state.phase)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(phaseTint(for: context.state.phase))
+                CompactPoppyLeadingView(phase: context.state.phase)
             } compactTrailing: {
                 compactTrailingView(context: context)
             } minimal: {
-                minimalView(context: context)
+                MinimalPoppyView(phase: context.state.phase, progress: context.state.progress)
             }
             .keylineTint(phaseTint(for: context.state.phase))
         }
@@ -98,14 +98,14 @@ struct ScanLiveActivityWidget: Widget {
             if let pct = context.state.progressPercent {
                 Text("\(pct)%")
                     .font(.subheadline.weight(.bold).monospacedDigit())
-                    .foregroundStyle(.cyan)
+                    .foregroundStyle(ChromaTheme.cream)
             } else {
                 ProgressView()
-                    .tint(.cyan)
+                    .tint(ChromaTheme.cream)
             }
         case .starting, .processing:
             ProgressView()
-                .tint(.cyan)
+                .tint(ChromaTheme.cream)
         }
     }
 
@@ -124,12 +124,12 @@ struct ScanLiveActivityWidget: Widget {
             if let pct = context.state.progressPercent {
                 Text("\(pct)%")
                     .font(.caption2.weight(.bold).monospacedDigit())
-                    .foregroundStyle(.cyan)
+                    .foregroundStyle(ChromaTheme.cream)
                     .lineLimit(1)
             } else {
                 Text(context.attributes.startedAt, style: .timer)
                     .font(.caption2.weight(.medium).monospacedDigit())
-                    .foregroundStyle(.cyan)
+                    .foregroundStyle(ChromaTheme.cream)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
                     .multilineTextAlignment(.trailing)
@@ -138,40 +138,216 @@ struct ScanLiveActivityWidget: Widget {
         case .starting, .processing:
             Text(context.attributes.startedAt, style: .timer)
                 .font(.caption2.weight(.medium).monospacedDigit())
-                .foregroundStyle(.cyan)
+                .foregroundStyle(ChromaTheme.cream)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
                 .multilineTextAlignment(.trailing)
                 .frame(maxWidth: 54, alignment: .trailing)
         }
     }
+}
 
-    @ViewBuilder
-    private func minimalView(context: ActivityViewContext<ScanLiveActivityAttributes>) -> some View {
-        switch context.state.phase {
-        case .completed:
-            Image(systemName: "checkmark.circle.fill")
-                .font(.caption)
-                .foregroundStyle(.green)
-        case .failed:
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.caption)
-                .foregroundStyle(.orange)
+// MARK: - Living Pigment-Pass Poppy Badge
+
+private struct PigmentPassBadgeView: View {
+    @Environment(\.isLuminanceReduced) private var isLuminanceReduced
+
+    let phase: ScanLiveActivityPhase
+    let progress: Double?
+    let size: CGFloat
+    let cornerRadius: CGFloat
+
+    private var revealFraction: CGFloat {
+        switch phase {
+        case .starting:
+            return 0.14
         case .scanning:
-            if let progress = context.state.progress {
-                ProgressView(value: progress)
-                    .progressViewStyle(.circular)
-                    .tint(.cyan)
-            } else {
-                phaseIcon(for: context.state.phase)
-                    .font(.caption2)
-                    .foregroundStyle(.cyan)
+            if let progress {
+                return CGFloat(min(0.95, max(0.08, progress)))
             }
-        case .starting, .processing:
-            phaseIcon(for: context.state.phase)
-                .font(.caption2)
-                .foregroundStyle(.cyan)
+            return 0.50
+        case .processing, .completed:
+            return 1.0
+        case .failed:
+            return 0.0
         }
+    }
+
+    private var showsScannerBeam: Bool {
+        phase == .starting || phase == .scanning
+    }
+
+    var body: some View {
+        ZStack {
+            // Unscanned warm-paper poppy (muted, awaiting scanner bar)
+            Image("PoppyPaper")
+                .resizable()
+                .scaledToFill()
+                .saturation(0.18)
+                .brightness(-0.28)
+
+            // Scanned region revealed in vivid Display P3 color above the beam
+            if revealFraction > 0 {
+                Image("PoppyPaper")
+                    .resizable()
+                    .scaledToFill()
+                    .saturation(isLuminanceReduced ? 0.65 : 1.0)
+                    .brightness(isLuminanceReduced ? -0.10 : 0.0)
+                    .mask(alignment: .top) {
+                        Rectangle()
+                            .frame(height: size * revealFraction)
+                    }
+            }
+
+            // Live glowing cyan scanner beam gliding down with progress
+            if showsScannerBeam {
+                VStack(spacing: 0) {
+                    Spacer()
+                        .frame(height: max(0, size * revealFraction - 1.5))
+
+                    ZStack {
+                        if !isLuminanceReduced {
+                            Rectangle()
+                                .fill(Color.cyan.opacity(0.65))
+                                .frame(height: 5)
+                                .blur(radius: 2.5)
+                        }
+                        Rectangle()
+                            .fill(
+                                LinearGradient(
+                                    colors: [.white.opacity(0.95), .cyan],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                            .frame(height: 2)
+                    }
+
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .strokeBorder(Color.white.opacity(isLuminanceReduced ? 0.12 : 0.22), lineWidth: 0.75)
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if phase == .completed {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: max(11, size * 0.34), weight: .bold))
+                    .foregroundStyle(.white, .green)
+                    .offset(x: 2, y: 2)
+            } else if phase == .failed {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: max(11, size * 0.34), weight: .bold))
+                    .foregroundStyle(.white, .orange)
+                    .offset(x: 2, y: 2)
+            }
+        }
+    }
+}
+
+// MARK: - Dynamic Island Poppy Slots
+
+private struct CompactPoppyLeadingView: View {
+    @Environment(\.isLuminanceReduced) private var isLuminanceReduced
+    let phase: ScanLiveActivityPhase
+
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            Image("PoppyCutout")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 20, height: 20)
+                .saturation(phase == .failed ? 0.25 : (isLuminanceReduced ? 0.65 : 1.0))
+
+            if phase == .completed {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white, .green)
+                    .offset(x: 2, y: 2)
+            } else if phase == .failed {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white, .orange)
+                    .offset(x: 2, y: 2)
+            }
+        }
+    }
+}
+
+private struct MinimalPoppyView: View {
+    @Environment(\.isLuminanceReduced) private var isLuminanceReduced
+    let phase: ScanLiveActivityPhase
+    let progress: Double?
+
+    var body: some View {
+        ZStack {
+            if phase == .completed {
+                Circle()
+                    .stroke(Color.green, lineWidth: 2)
+            } else if phase == .failed {
+                Circle()
+                    .stroke(Color.orange, lineWidth: 2)
+            } else if let progress {
+                Circle()
+                    .stroke(Color.white.opacity(0.18), lineWidth: 2)
+                Circle()
+                    .trim(from: 0, to: CGFloat(min(1.0, max(0.04, progress))))
+                    .stroke(
+                        ChromaTheme.cream.opacity(isLuminanceReduced ? 0.7 : 1.0),
+                        style: StrokeStyle(lineWidth: 2, lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(-90))
+            } else {
+                Circle()
+                    .stroke(ChromaTheme.cream.opacity(0.45), lineWidth: 1.5)
+            }
+
+            Image("PoppyCutout")
+                .resizable()
+                .scaledToFit()
+                .padding(3.5)
+                .saturation(phase == .failed ? 0.25 : (isLuminanceReduced ? 0.65 : 1.0))
+        }
+        .frame(width: 22, height: 22)
+    }
+}
+
+// MARK: - Vermilion-to-Cyan Progress Bar
+
+private struct PigmentProgressBar: View {
+    @Environment(\.isLuminanceReduced) private var isLuminanceReduced
+    let progress: Double
+
+    private var clamped: CGFloat {
+        CGFloat(min(1.0, max(0.0, progress)))
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let fillWidth = max(4, geo.size.width * clamped)
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.white.opacity(0.16))
+
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                ChromaTheme.vermilion.opacity(isLuminanceReduced ? 0.65 : 1.0),
+                                Color.cyan.opacity(isLuminanceReduced ? 0.75 : 1.0)
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: fillWidth)
+            }
+        }
+        .frame(height: 4.5)
     }
 }
 
@@ -182,15 +358,13 @@ private struct LockScreenScanLiveActivityView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(phaseTint(for: context.state.phase).opacity(0.20))
-                        .frame(width: 36, height: 36)
-                    phaseIcon(for: context.state.phase)
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(phaseTint(for: context.state.phase))
-                }
+            HStack(alignment: .center, spacing: 11) {
+                PigmentPassBadgeView(
+                    phase: context.state.phase,
+                    progress: context.state.progress,
+                    size: 44,
+                    cornerRadius: 11
+                )
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(lockScreenTitle)
@@ -209,8 +383,7 @@ private struct LockScreenScanLiveActivityView: View {
             }
 
             if let progress = context.state.progress, !context.state.isTerminal {
-                ProgressView(value: progress)
-                    .tint(phaseTint(for: context.state.phase))
+                PigmentProgressBar(progress: progress)
             }
 
             HStack(spacing: 8) {
@@ -265,19 +438,19 @@ private struct LockScreenScanLiveActivityView: View {
             if let pct = context.state.progressPercent {
                 Text("\(pct)%")
                     .font(.subheadline.weight(.bold).monospacedDigit())
-                    .foregroundStyle(.cyan)
+                    .foregroundStyle(ChromaTheme.cream)
             } else {
                 ProgressView()
-                    .tint(.cyan)
+                    .tint(ChromaTheme.cream)
             }
         case .starting, .processing:
             ProgressView()
-                .tint(.cyan)
+                .tint(ChromaTheme.cream)
         }
     }
 }
 
-// MARK: - Shared Formatting & Iconography
+// MARK: - Shared Formatting & Tint
 
 private func phaseTitle(for phase: ScanLiveActivityPhase) -> String {
     switch phase {
@@ -289,25 +462,12 @@ private func phaseTitle(for phase: ScanLiveActivityPhase) -> String {
     }
 }
 
-private func phaseIcon(for phase: ScanLiveActivityPhase) -> Image {
-    switch phase {
-    case .starting, .scanning:
-        return Image(systemName: "scanner.fill")
-    case .processing:
-        return Image(systemName: "wand.and.stars")
-    case .completed:
-        return Image(systemName: "checkmark.circle.fill")
-    case .failed:
-        return Image(systemName: "exclamationmark.triangle.fill")
-    }
-}
-
 private func phaseTint(for phase: ScanLiveActivityPhase) -> Color {
     switch phase {
     case .starting, .scanning:
-        return .cyan
+        return ChromaTheme.vermilion
     case .processing:
-        return .indigo
+        return ChromaTheme.cream
     case .completed:
         return .green
     case .failed:
