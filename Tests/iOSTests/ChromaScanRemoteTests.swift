@@ -2,6 +2,7 @@ import XCTest
 import Network
 import UIKit
 import CoreGraphics
+@preconcurrency import UserNotifications
 @testable import ChromaScanRemote
 
 @MainActor
@@ -145,6 +146,210 @@ final class ChromaScanRemoteTests: XCTestCase {
         try await waitUntil(timeout: 2.0) { store.snapshot?.isBusy == false && store.progress == nil }
     }
 
+    func testScanCompletionNotificationPayloadFormatting() {
+        let shortPayload = ScanCompletionNotificationPayload(
+            filename: "scan-001.tiff",
+            pixelWidth: 2400,
+            pixelHeight: 3200,
+            fileSizeBytes: 12 * 1024 * 1024,
+            elapsedSeconds: 0.4
+        )
+        XCTAssertEqual(shortPayload.title, "Scan Complete")
+        XCTAssertEqual(shortPayload.body, "scan-001.tiff · 2400×3200 · 12.0 MB")
+
+        let timedPayload = ScanCompletionNotificationPayload(
+            filename: "watercolor-004.png",
+            pixelWidth: 10200,
+            pixelHeight: 13200,
+            fileSizeBytes: 157_286_400,
+            elapsedSeconds: 75.0
+        )
+        XCTAssertEqual(timedPayload.body, "watercolor-004.png · 10200×13200 · 150.0 MB · 1m 15s")
+    }
+
+    func testScanCompletionPostsLocalNotificationAndManagesBackgroundTask() async throws {
+        let mockHost = try LoopbackMockMacHost(pin: "123456")
+        let port = try await mockHost.start()
+        defer { mockHost.stop() }
+
+        let tokenStore = KeychainTokenStore()
+        tokenStore.deleteToken(for: "mock-mac-studio")
+        tokenStore.deleteToken(for: "manual:127.0.0.1:\(port)")
+
+        let suiteName = "com.chromascan.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let mockNotifier = MockScanCompletionNotifier(initialStatus: .notDetermined, statusAfterRequest: .authorized)
+        let mockBG = MockBackgroundTaskManager()
+
+        let store = RemoteSessionStore(
+            clientName: "Simulator iPhone",
+            tokenStore: tokenStore,
+            userDefaults: defaults,
+            notifier: mockNotifier,
+            backgroundTaskManager: mockBG
+        )
+        defer { store.disconnect() }
+
+        XCTAssertTrue(store.notifyOnScanComplete)
+
+        store.connectManual(host: "127.0.0.1", port: port, pin: "123456")
+        try await waitUntil(timeout: 3.0) {
+            if case .connected = store.phase, store.snapshot != nil { return true }
+            return false
+        }
+
+        // Backgrounding while idle should NOT begin a background task
+        store.handleScenePhaseBackground()
+        XCTAssertEqual(mockBG.beginCount, 0)
+        XCTAssertFalse(mockBG.hasActiveTask)
+
+        // Trigger scan -> requests notification authorization and transitions to active scan
+        store.triggerScan()
+        try await waitUntil(timeout: 2.0) {
+            store.isScanActive && store.notificationAuthorizationStatus == .authorized
+        }
+        let requestCount = await mockNotifier.requestCount
+        XCTAssertGreaterThanOrEqual(requestCount, 1)
+
+        // Backgrounding while scan is active begins a background task
+        store.handleScenePhaseBackground()
+        XCTAssertEqual(mockBG.beginCount, 1)
+        XCTAssertTrue(mockBG.hasActiveTask)
+
+        // Complete scan (host sends snapshot(isBusy: false) followed by scanCompleted, matching ScanSessionEngine)
+        mockHost.broadcastScanCompleted(
+            filename: "art-002.tiff",
+            pixelWidth: 4800,
+            pixelHeight: 6400,
+            fileSizeBytes: 52_428_800,
+            elapsedSeconds: 18.0
+        )
+
+        try await waitUntil(timeout: 2.0) { !mockBG.hasActiveTask }
+        let posted = await mockNotifier.postedPayloads
+        XCTAssertEqual(posted.count, 1)
+        XCTAssertEqual(
+            posted.first,
+            ScanCompletionNotificationPayload(
+                filename: "art-002.tiff",
+                pixelWidth: 4800,
+                pixelHeight: 6400,
+                fileSizeBytes: 52_428_800,
+                elapsedSeconds: 18.0
+            )
+        )
+        XCTAssertEqual(mockBG.endCount, 1)
+
+        // Disable notifications -> setting persists, no background task or notification on next scan
+        store.setNotifyOnScanComplete(false)
+        XCTAssertFalse(store.notifyOnScanComplete)
+        XCTAssertFalse(defaults.bool(forKey: "remote.notifyOnScanComplete"))
+
+        store.triggerScan()
+        try await waitUntil(timeout: 2.0) { store.isScanActive }
+        store.handleScenePhaseBackground()
+        XCTAssertEqual(mockBG.beginCount, 1)
+
+        mockHost.broadcastScanCompleted(
+            filename: "art-003.tiff",
+            pixelWidth: 4800,
+            pixelHeight: 6400,
+            fileSizeBytes: 52_428_800,
+            elapsedSeconds: 20.0
+        )
+        try await waitUntil(timeout: 2.0) { !store.isScanActive }
+        try await Task.sleep(for: .milliseconds(100))
+        let postedAfterDisable = await mockNotifier.postedPayloads
+        XCTAssertEqual(postedAfterDisable.count, 1)
+    }
+
+    func testDirectAPNsTokenSyncAndBackgroundLocalDeduplication() async throws {
+        let mockHost = try LoopbackMockMacHost(pin: "123456", apnsConfigured: true)
+        let port = try await mockHost.start()
+        defer { mockHost.stop() }
+
+        let tokenStore = KeychainTokenStore()
+        tokenStore.deleteToken(for: "mock-mac-studio")
+        tokenStore.deleteToken(for: "manual:127.0.0.1:\(port)")
+
+        let suiteName = "com.chromascan.apns.ios.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let mockNotifier = MockScanCompletionNotifier(initialStatus: .authorized, statusAfterRequest: .authorized)
+        let mockBG = MockBackgroundTaskManager()
+
+        let store = RemoteSessionStore(
+            clientName: "Simulator iPhone",
+            tokenStore: tokenStore,
+            userDefaults: defaults,
+            notifier: mockNotifier,
+            backgroundTaskManager: mockBG
+        )
+        defer { store.disconnect() }
+
+        store.connectManual(host: "127.0.0.1", port: port, pin: "123456")
+        try await waitUntil(timeout: 3.0) {
+            if case .connected = store.phase, store.hostAPNsConfigured { return true }
+            return false
+        }
+
+        // Register APNs token -> synced to Mac host
+        store.updateAPNsDeviceToken("0123456789abcdef")
+        try await waitUntil(timeout: 2.0) {
+            mockHost.lastRegisteredPushToken == "0123456789abcdef" && mockHost.lastPushEnabled == true
+        }
+        XCTAssertTrue(store.isDirectAPNsActive)
+        let remoteRegCount = await mockNotifier.remoteRegisterCount
+        XCTAssertGreaterThanOrEqual(remoteRegCount, 1)
+
+        // When backgrounded with Direct APNs active, do NOT start local background task or double-notify locally
+        store.triggerScan()
+        try await waitUntil(timeout: 2.0) { store.isScanActive }
+        store.handleScenePhaseBackground()
+        XCTAssertEqual(mockBG.beginCount, 0)
+
+        mockHost.broadcastScanCompleted(
+            filename: "locked-scan-001.tiff",
+            pixelWidth: 4800,
+            pixelHeight: 6400,
+            fileSizeBytes: 52_428_800,
+            elapsedSeconds: 45
+        )
+        try await waitUntil(timeout: 2.0) { !store.isScanActive }
+        try await Task.sleep(for: .milliseconds(100))
+        let postedWhileBackground = await mockNotifier.postedPayloads
+        XCTAssertEqual(postedWhileBackground.count, 0)
+
+        // Returning to foreground -> local notification fires immediately on scan completion
+        store.handleScenePhaseActive()
+        store.triggerScan()
+        try await waitUntil(timeout: 2.0) { store.isScanActive }
+        mockHost.broadcastScanCompleted(
+            filename: "fg-scan-002.tiff",
+            pixelWidth: 4800,
+            pixelHeight: 6400,
+            fileSizeBytes: 52_428_800,
+            elapsedSeconds: 12
+        )
+        try await waitUntil(timeout: 2.0) { !store.isScanActive }
+        try await waitUntil(timeout: 2.0) {
+            store.toastMessage?.contains("fg-scan-002.tiff") == true
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        let postedInForeground = await mockNotifier.postedPayloads
+        XCTAssertEqual(postedInForeground.count, 1)
+        XCTAssertEqual(postedInForeground.first?.filename, "fg-scan-002.tiff")
+
+        // Turning off notifications notifies Mac host to disable push for this device
+        store.setNotifyOnScanComplete(false)
+        try await waitUntil(timeout: 2.0) {
+            mockHost.lastPushEnabled == false && mockHost.lastRegisteredPushToken == nil
+        }
+    }
+
     private func waitUntil(timeout: TimeInterval, condition: @escaping @MainActor () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition() {
@@ -162,6 +367,7 @@ final class ChromaScanRemoteTests: XCTestCase {
 @MainActor
 private final class LoopbackMockMacHost {
     private let pin: String
+    private let apnsConfigured: Bool
     private let validToken = "ios-test-token-256bit"
     private let queue = DispatchQueue(label: "com.chromascan.iostest.mockhost")
     private var listener: NWListener?
@@ -173,9 +379,12 @@ private final class LoopbackMockMacHost {
     private var activeOperation: CompanionOperation?
     private var currentStatusText: String = "Ready"
     private var isScanTrimmed: Bool = false
+    private(set) var lastRegisteredPushToken: String?
+    private(set) var lastPushEnabled: Bool?
 
-    init(pin: String) throws {
+    init(pin: String, apnsConfigured: Bool = false) throws {
         self.pin = pin
+        self.apnsConfigured = apnsConfigured
     }
 
     func start() async throws -> UInt16 {
@@ -270,6 +479,7 @@ private final class LoopbackMockMacHost {
                     authToken: validToken,
                     snapshot: makeSnapshot()
                 ), on: conn)
+                sendText(.pushStatus(apnsConfigured: apnsConfigured), on: conn)
                 sendSyntheticImage(kind: .previewProxy, requestID: 0, normRect: nil, on: conn)
             } else {
                 sendText(.authRequired(hostID: "mock-mac-studio", hostName: "Mock Mac Studio", reason: nil), on: conn)
@@ -308,6 +518,10 @@ private final class LoopbackMockMacHost {
             currentStatusText = "Scan cancelled"
             sendText(.snapshot(snapshot: makeSnapshot()), on: conn)
 
+        case .registerPushToken(let deviceToken, _, let enabled, _):
+            lastRegisteredPushToken = deviceToken
+            lastPushEnabled = enabled
+
         default:
             break
         }
@@ -328,6 +542,30 @@ private final class LoopbackMockMacHost {
                 expectedBytes: expectedBytes,
                 elapsedSeconds: elapsedSeconds,
                 statusText: statusText
+            ), on: conn)
+        }
+    }
+
+    func broadcastScanCompleted(
+        filename: String,
+        pixelWidth: Int,
+        pixelHeight: Int,
+        fileSizeBytes: Int64,
+        elapsedSeconds: Double
+    ) {
+        isBusy = false
+        activeOperation = nil
+        currentViewMode = .scan
+        currentStatusText = "Saved \(filename)"
+        let snap = makeSnapshot()
+        for conn in connections {
+            sendText(.snapshot(snapshot: snap), on: conn)
+            sendText(.scanCompleted(
+                filename: filename,
+                pixelWidth: pixelWidth,
+                pixelHeight: pixelHeight,
+                fileSizeBytes: fileSizeBytes,
+                elapsedSeconds: elapsedSeconds
             ), on: conn)
         }
     }
@@ -410,5 +648,59 @@ private final class LoopbackMockMacHost {
         let meta = NWProtocolWebSocket.Metadata(opcode: .binary)
         let ctx = NWConnection.ContentContext(identifier: "binary", metadata: [meta])
         conn.send(content: data, contentContext: ctx, isComplete: true, completion: .contentProcessed { _ in })
+    }
+}
+
+// MARK: - Notification & Background Task Test Doubles
+
+private actor MockScanCompletionNotifier: ScanCompletionNotifying {
+    private var status: UNAuthorizationStatus
+    private let statusAfterRequest: UNAuthorizationStatus
+    private(set) var requestCount = 0
+    private(set) var remoteRegisterCount = 0
+    private(set) var postedPayloads: [ScanCompletionNotificationPayload] = []
+
+    init(initialStatus: UNAuthorizationStatus, statusAfterRequest: UNAuthorizationStatus) {
+        self.status = initialStatus
+        self.statusAfterRequest = statusAfterRequest
+    }
+
+    func authorizationStatus() async -> UNAuthorizationStatus {
+        status
+    }
+
+    func requestAuthorizationIfNeeded() async -> UNAuthorizationStatus {
+        guard status == .notDetermined else { return status }
+        requestCount += 1
+        status = statusAfterRequest
+        return status
+    }
+
+    func registerForRemoteNotifications() async {
+        remoteRegisterCount += 1
+    }
+
+    func postScanCompleted(_ payload: ScanCompletionNotificationPayload) async {
+        guard status == .authorized || status == .provisional || status == .ephemeral else { return }
+        postedPayloads.append(payload)
+    }
+}
+
+@MainActor
+private final class MockBackgroundTaskManager: BackgroundTaskManaging {
+    private(set) var hasActiveTask = false
+    private(set) var beginCount = 0
+    private(set) var endCount = 0
+
+    func beginTask(name: String, onExpiration: @escaping @MainActor () -> Void) {
+        guard !hasActiveTask else { return }
+        hasActiveTask = true
+        beginCount += 1
+    }
+
+    func endTask() {
+        guard hasActiveTask else { return }
+        hasActiveTask = false
+        endCount += 1
     }
 }

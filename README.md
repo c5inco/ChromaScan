@@ -27,3 +27,15 @@ Or build from the command line:
 ```bash
 xcodebuild -project ChromaScan.xcodeproj -scheme ChromaScan -configuration Release build
 ```
+
+## iOS Companion & Scan Completion Notifications
+
+ChromaScan includes an iOS Companion target (`ChromaScanRemote`) that connects to your Mac over local Bonjour (`_chromascan._tcp`).
+
+1. **Signing for your own iPhone:** Update `DEVELOPMENT_TEAM` and `PRODUCT_BUNDLE_IDENTIFIER` for `ChromaScanRemote` in `project.yml` (or in Xcode → Signing & Capabilities) to your own Apple Developer team and a unique bundle ID, then run `xcodegen generate` and build `ChromaScanRemote` to your iPhone.
+2. **Local notifications (zero setup):** Out of the box, `ChromaScanRemote` fires a local notification when a scan finishes while the app is open or within iOS's ~30-second background grace period.
+3. **Lock-screen push notifications (Direct Mac → APNs, optional):** For multi-minute 1200 DPI scans while your iPhone is locked, the Mac app can push directly to Apple's APNs HTTP/2 API using `CryptoKit` (no cloud server required):
+   - Create an **Apple Push Notifications service (APNs)** `.p8` key at **Apple Developer → Certificates, Identifiers & Profiles → Keys** and download `AuthKey_<KEYID>.p8`.
+   - **Option A (UI):** Click the **iPhone Companion** toolbar button in ChromaScan on your Mac → **Configure APNs…**, select your `.p8` file (Key ID auto-fills from the filename; Bundle ID auto-detects from your paired iPhone), enter your 10-character Apple Team ID, and click **Save**.
+   - **Option B (`~/.apns/` auto-load, zero UI clicks):** Place `AuthKey_<KEYID>.p8` and a 1-line `~/.apns/apns.env` file (`APNS_TEAM_ID=<YOUR_TEAM_ID>`) in `~/.apns/` (`chmod 600`). ChromaScan automatically detects and uses them on launch without storing the key in git or the app bundle.
+   - Click **Send Test Push** in the Companion popover to verify delivery.

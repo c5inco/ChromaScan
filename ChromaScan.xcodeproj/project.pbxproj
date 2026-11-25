@@ -35,7 +35,9 @@
 		B4EE293F9286CE9D44B5C202 /* CompanionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2C164A02E047BE51616C98A /* CompanionClient.swift */; };
 		B546D55F3440DDD4FD633D0A /* CompanionProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 144640D0594240C6D8FD1800 /* CompanionProtocol.swift */; };
 		BC5F30AC44476441713F0933 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8891F199ADA7F2525ABAFB38 /* main.swift */; };
+		BCDF19CF357265EED9005DB7 /* ScanCompletionNotifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FFE16C5054ED0DA0BB95511 /* ScanCompletionNotifier.swift */; };
 		C4B6CF12C214E7C49E78EB3D /* ChromaScanRemoteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 402CE49A4AC2D4FC925AEB05 /* ChromaScanRemoteTests.swift */; };
+		C8F4B4DFA910D0CDB4460263 /* APNsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19524E18267A0F7C89DCE128 /* APNsClient.swift */; };
 		D8BBA79C42F2BAD9D7BF2575 /* ScanSessionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AE8EBCB485313B1634CEE7A /* ScanSessionEngine.swift */; };
 		DC8D96F6F15D22163A06F084 /* RemoteWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CB280824279346BC069A3C6 /* RemoteWorkspaceView.swift */; };
 		E88BD7567A02468FB5C28DB6 /* ImagePipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1EB34041D3A58F462DEC8D /* ImagePipeline.swift */; };
@@ -67,8 +69,10 @@
 		13AAE8EB20CC1850E90EA965 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		144640D0594240C6D8FD1800 /* CompanionProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionProtocol.swift; sourceTree = "<group>"; };
 		16E3F168FEE319DDE0BA2582 /* CompanionPopoverViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionPopoverViewController.swift; sourceTree = "<group>"; };
+		19524E18267A0F7C89DCE128 /* APNsClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APNsClient.swift; sourceTree = "<group>"; };
 		1AE8EBCB485313B1634CEE7A /* ScanSessionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanSessionEngine.swift; sourceTree = "<group>"; };
 		1D7050506F4EE0F1C24D2F2B /* ESCLXMLParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ESCLXMLParser.swift; sourceTree = "<group>"; };
+		1FFE16C5054ED0DA0BB95511 /* ScanCompletionNotifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanCompletionNotifier.swift; sourceTree = "<group>"; };
 		26DD1805F1D6F685488C90FD /* PreviewCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewCanvasView.swift; sourceTree = "<group>"; };
 		28B7DDC16C1A43320CD832EA /* ChromaScanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromaScanTests.swift; sourceTree = "<group>"; };
 		3A6C658899A253C7E75AA58D /* MainWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowController.swift; sourceTree = "<group>"; };
@@ -119,6 +123,7 @@
 		425E3A462956A056C7A87F00 /* MacHost */ = {
 			isa = PBXGroup;
 			children = (
+				19524E18267A0F7C89DCE128 /* APNsClient.swift */,
 				5AA3D80B00290F84EDA6A08C /* AppDelegate.swift */,
 				FC908B070D72FD1B449890DF /* AppPreferences.swift */,
 				F8A8CCE4993FB8C1DC395790 /* BonjourScannerBrowser.swift */,
@@ -147,6 +152,7 @@
 				D2771DBF41200CE845EE6B6F /* RemoteControlsSheet.swift */,
 				72593C77880160F6004A175D /* RemoteSessionStore.swift */,
 				0CB280824279346BC069A3C6 /* RemoteWorkspaceView.swift */,
+				1FFE16C5054ED0DA0BB95511 /* ScanCompletionNotifier.swift */,
 			);
 			path = iOSCompanion;
 			sourceTree = "<group>";
@@ -386,6 +392,7 @@
 				4F2FE15701683A8D22354D9E /* RemoteControlsSheet.swift in Sources */,
 				6CEAD245E8AEBF410FA257C4 /* RemoteSessionStore.swift in Sources */,
 				DC8D96F6F15D22163A06F084 /* RemoteWorkspaceView.swift in Sources */,
+				BCDF19CF357265EED9005DB7 /* ScanCompletionNotifier.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -393,6 +400,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C8F4B4DFA910D0CDB4460263 /* APNsClient.swift in Sources */,
 				B24CDE02159825DD12076450 /* AppDelegate.swift in Sources */,
 				0154233DA50988DB0968F645 /* AppPreferences.swift in Sources */,
 				4DE06D4A4DC15298827ADB24 /* BonjourScannerBrowser.swift in Sources */,
@@ -497,6 +505,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Resources/ChromaScanRemote.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				DEVELOPMENT_TEAM = FXB7YX3ZD4;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -648,6 +657,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Resources/ChromaScanRemote.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				DEVELOPMENT_TEAM = FXB7YX3ZD4;
 				GENERATE_INFOPLIST_FILE = NO;

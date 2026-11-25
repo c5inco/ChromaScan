@@ -18,6 +18,7 @@ private let connectionLog = Logger(subsystem: "com.chromascan.connection", categ
 final class CompanionServer {
     private let engine: ScanSessionEngine
     private let preferences: AppPreferences
+    private let apnsClient: any APNsPushing
     private let advertiseBonjour: Bool
     private let requestedPort: UInt16
     private let listenerQueue = DispatchQueue(label: "com.chromascan.companion.server")
@@ -37,6 +38,8 @@ final class CompanionServer {
     private(set) var isRunning: Bool = false
     private(set) var port: UInt16?
     private(set) var lastError: String?
+    private(set) var lastPushStatus: String?
+    private(set) var lastPushSucceeded: Bool?
 
     var hostID: String { preferences.companionHostID }
 
@@ -62,12 +65,14 @@ final class CompanionServer {
         engine: ScanSessionEngine,
         preferences: AppPreferences,
         advertiseBonjour: Bool = true,
-        port: UInt16 = 0
+        port: UInt16 = 0,
+        apnsClient: any APNsPushing = APNsClient()
     ) {
         self.engine = engine
         self.preferences = preferences
         self.advertiseBonjour = advertiseBonjour
         self.requestedPort = port
+        self.apnsClient = apnsClient
 
         self.engineObserverID = engine.addObserver { [weak self] event in
             self?.handleEngineEvent(event)
@@ -312,6 +317,7 @@ final class CompanionServer {
             ),
             to: session
         )
+        sendHostMessage(.pushStatus(apnsConfigured: preferences.isAPNsConfigured), to: session)
         onStateChanged?()
 
         // Push currently rendered proxy image immediately if available
@@ -389,7 +395,31 @@ final class CompanionServer {
                     )
                 }
             }
+
+        case .registerPushToken(let deviceToken, let environment, let enabled, let bundleID):
+            guard let authToken = session.authToken else { return }
+            preferences.updatePushRegistration(
+                forAuthToken: authToken,
+                deviceToken: deviceToken,
+                environment: environment,
+                enabled: enabled,
+                bundleID: bundleID
+            )
+            onStateChanged?()
         }
+    }
+
+    func notifyAPNsConfigurationChanged() {
+        lastPushStatus = nil
+        lastPushSucceeded = nil
+        broadcastHostMessage(.pushStatus(apnsConfigured: preferences.isAPNsConfigured))
+        onStateChanged?()
+    }
+
+    @discardableResult
+    func sendTestPush() async -> Bool {
+        let content = APNsNotificationContent.testNotification(hostName: hostDisplayName)
+        return await deliverAPNsPush(content)
     }
 
     // MARK: - Engine Events -> Broadcast
@@ -458,15 +488,26 @@ final class CompanionServer {
             )
 
         case .scanCompleted(let url, let pixelWidth, let pixelHeight, let fileSizeBytes, let elapsedSeconds):
+            let filename = url.lastPathComponent
             broadcastHostMessage(
                 .scanCompleted(
-                    filename: url.lastPathComponent,
+                    filename: filename,
                     pixelWidth: pixelWidth,
                     pixelHeight: pixelHeight,
                     fileSizeBytes: fileSizeBytes,
                     elapsedSeconds: elapsedSeconds
                 )
             )
+            let pushContent = APNsNotificationContent.scanCompleted(
+                filename: filename,
+                pixelWidth: pixelWidth,
+                pixelHeight: pixelHeight,
+                fileSizeBytes: fileSizeBytes,
+                elapsedSeconds: elapsedSeconds
+            )
+            Task { [weak self] in
+                await self?.deliverAPNsPush(pushContent)
+            }
 
         case .exportCompleted(let url, let fileSizeBytes, let elapsedSeconds):
             broadcastHostMessage(
@@ -480,6 +521,75 @@ final class CompanionServer {
         case .error(let title, let message):
             broadcastHostMessage(.error(title: title, message: message))
         }
+    }
+
+    // MARK: - Direct Mac -> APNs Push Delivery
+
+    @discardableResult
+    private func deliverAPNsPush(_ content: APNsNotificationContent) async -> Bool {
+        guard let config = preferences.apnsConfiguration else { return false }
+        let eligible = preferences.pushEligibleDevices
+        guard !eligible.isEmpty else { return false }
+
+        // Deduplicate by APNs device token so a re-paired phone doesn't receive duplicates
+        var seenTokens = Set<String>()
+        var targets: [(token: String, env: PushEnvironment, bundleID: String)] = []
+        for device in eligible {
+            guard let token = device.apnsDeviceToken, !token.isEmpty else { continue }
+            if seenTokens.insert(token).inserted {
+                let topic = (device.apnsBundleID?.isEmpty == false) ? device.apnsBundleID! : config.bundleID
+                targets.append((token: token, env: device.apnsEnvironment ?? .sandbox, bundleID: topic))
+            }
+        }
+        guard !targets.isEmpty else { return false }
+
+        var deliveredCount = 0
+        var firstError: String?
+
+        for target in targets {
+            let deviceConfig = APNsConfiguration(
+                keyID: config.keyID,
+                teamID: config.teamID,
+                bundleID: target.bundleID,
+                privateKeyPEM: config.privateKeyPEM
+            )
+            let result = await apnsClient.send(
+                notification: content,
+                toDeviceToken: target.token,
+                preferredEnvironment: target.env,
+                configuration: deviceConfig
+            )
+            switch result {
+            case .delivered(let actualEnv):
+                deliveredCount += 1
+                if actualEnv != target.env {
+                    preferences.updateAPNsEnvironment(actualEnv, forDeviceToken: target.token)
+                }
+            case .unregistered:
+                preferences.clearAPNsToken(target.token)
+                if firstError == nil {
+                    firstError = "Device push token expired (reopen iPhone app to refresh)"
+                }
+            case .failed(let statusCode, let reason):
+                if firstError == nil {
+                    firstError = statusCode > 0 ? "HTTP \(statusCode): \(reason)" : reason
+                }
+            }
+        }
+
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        let timestamp = formatter.string(from: Date())
+        if deliveredCount > 0 {
+            lastPushSucceeded = true
+            let suffix = deliveredCount == 1 ? "1 device" : "\(deliveredCount) devices"
+            lastPushStatus = "Last push sent to \(suffix) at \(timestamp)"
+        } else {
+            lastPushSucceeded = false
+            lastPushStatus = "Push failed: \(firstError ?? "Unknown error")"
+        }
+        onStateChanged?()
+        return deliveredCount > 0
     }
 
     // MARK: - Wire Sending Helpers

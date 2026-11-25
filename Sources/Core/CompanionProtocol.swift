@@ -18,6 +18,18 @@ enum CompanionOperation: String, Codable, Sendable, Equatable {
     case export
 }
 
+enum PushEnvironment: String, Codable, Sendable, Equatable {
+    case sandbox
+    case production
+
+    var opposite: PushEnvironment {
+        switch self {
+        case .sandbox: return .production
+        case .production: return .sandbox
+        }
+    }
+}
+
 enum CompanionImageKind: String, Codable, Sendable, Equatable {
     case previewProxy
     case scanProxy
@@ -115,6 +127,7 @@ enum ClientMessage: Equatable, Sendable {
     case cancel
     case requestTile(requestID: UInt32, normalizedRect: NormalizedCropRect, maxPixelWidth: Int)
     case requestPhotosCopy(requestID: UInt32, format: OutputFormat, quality: Double)
+    case registerPushToken(deviceToken: String?, environment: PushEnvironment, enabled: Bool, bundleID: String? = nil)
     case ping
 }
 
@@ -137,6 +150,10 @@ extension ClientMessage: Codable {
         case maxPixelWidth
         case format
         case quality
+        case deviceToken
+        case environment
+        case enabled
+        case bundleID
     }
 
     init(from decoder: Decoder) throws {
@@ -187,6 +204,13 @@ extension ClientMessage: Codable {
                 requestID: try c.decode(UInt32.self, forKey: .requestID),
                 format: try c.decode(OutputFormat.self, forKey: .format),
                 quality: try c.decode(Double.self, forKey: .quality)
+            )
+        case "registerPushToken":
+            self = .registerPushToken(
+                deviceToken: try c.decodeIfPresent(String.self, forKey: .deviceToken),
+                environment: try c.decode(PushEnvironment.self, forKey: .environment),
+                enabled: try c.decode(Bool.self, forKey: .enabled),
+                bundleID: try c.decodeIfPresent(String.self, forKey: .bundleID)
             )
         case "ping":
             self = .ping
@@ -243,6 +267,12 @@ extension ClientMessage: Codable {
             try c.encode(requestID, forKey: .requestID)
             try c.encode(format, forKey: .format)
             try c.encode(quality, forKey: .quality)
+        case .registerPushToken(let deviceToken, let environment, let enabled, let bundleID):
+            try c.encode("registerPushToken", forKey: .type)
+            try c.encodeIfPresent(deviceToken, forKey: .deviceToken)
+            try c.encode(environment, forKey: .environment)
+            try c.encode(enabled, forKey: .enabled)
+            try c.encodeIfPresent(bundleID, forKey: .bundleID)
         case .ping:
             try c.encode("ping", forKey: .type)
         }
@@ -259,6 +289,7 @@ enum HostMessage: Equatable, Sendable {
     case imageReady(CompanionImageReadyInfo)
     case scanCompleted(filename: String, pixelWidth: Int, pixelHeight: Int, fileSizeBytes: Int64, elapsedSeconds: Double)
     case exportCompleted(filename: String, fileSizeBytes: Int64, elapsedSeconds: Double)
+    case pushStatus(apnsConfigured: Bool)
     case error(title: String, message: String)
     case pong
 }
@@ -291,6 +322,7 @@ extension HostMessage: Codable {
         case pixelWidth
         case pixelHeight
         case fileSizeBytes
+        case apnsConfigured
         case title
         case message
     }
@@ -351,6 +383,8 @@ extension HostMessage: Codable {
                 fileSizeBytes: try c.decode(Int64.self, forKey: .fileSizeBytes),
                 elapsedSeconds: try c.decode(Double.self, forKey: .elapsedSeconds)
             )
+        case "pushStatus":
+            self = .pushStatus(apnsConfigured: try c.decode(Bool.self, forKey: .apnsConfigured))
         case "error":
             self = .error(
                 title: try c.decode(String.self, forKey: .title),
@@ -412,6 +446,9 @@ extension HostMessage: Codable {
             try c.encode(filename, forKey: .filename)
             try c.encode(fileSizeBytes, forKey: .fileSizeBytes)
             try c.encode(elapsedSeconds, forKey: .elapsedSeconds)
+        case .pushStatus(let apnsConfigured):
+            try c.encode("pushStatus", forKey: .type)
+            try c.encode(apnsConfigured, forKey: .apnsConfigured)
         case .error(let title, let message):
             try c.encode("error", forKey: .type)
             try c.encode(title, forKey: .title)

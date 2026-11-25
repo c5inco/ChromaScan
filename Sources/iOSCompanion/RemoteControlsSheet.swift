@@ -377,7 +377,28 @@ struct RemoteControlsSheet: View {
 
     @ViewBuilder
     private func companionActionsSection(_ snap: SessionSnapshot) -> some View {
-        Section("iPhone Companion") {
+        Section {
+            Toggle(isOn: Binding(
+                get: { store.notifyOnScanComplete },
+                set: { store.setNotifyOnScanComplete($0) }
+            )) {
+                Label("Notify When Scan Completes", systemImage: "bell.badge")
+            }
+
+            if store.notifyOnScanComplete && store.notificationAuthorizationStatus == .denied {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Notifications are turned off in iOS Settings for ChromaScan.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Open iOS Settings") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(url)
+                        }
+                    }
+                    .font(.caption.weight(.medium))
+                }
+            }
+
             Button {
                 store.saveCopyToPhotos()
             } label: {
@@ -395,6 +416,21 @@ struct RemoteControlsSheet: View {
                 dismiss()
                 store.disconnect()
             }
+        } header: {
+            Text("iPhone Companion")
+        } footer: {
+            if store.notifyOnScanComplete {
+                if store.isDirectAPNsActive {
+                    Text("Direct push via Mac is active — alerts deliver even when your iPhone is locked.")
+                } else if store.hostAPNsConfigured {
+                    Text("Mac APNs is configured; waiting for an iPhone push token (physical iPhone required). Local alerts remain active.")
+                } else {
+                    Text("Local alerts active. Configure an Apple APNs .p8 key in ChromaScan on your Mac to receive alerts while your iPhone is locked.")
+                }
+            }
+        }
+        .onAppear {
+            store.refreshNotificationAuthorizationStatus()
         }
     }
 

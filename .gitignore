@@ -1,6 +1,8 @@
 .DS_Store
 build/
 DerivedData/
+*.p8
+*.env
 *.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
 *.xcodeproj/project.xcworkspace/xcuserdata/

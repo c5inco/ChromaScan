@@ -1,7 +1,29 @@
 import SwiftUI
+import UIKit
+
+final class ChromaScanRemoteAppDelegate: NSObject, UIApplicationDelegate {
+    func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        Task { @MainActor in
+            PushTokenRelay.shared.didRegister(deviceTokenData: deviceToken)
+        }
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+        Task { @MainActor in
+            PushTokenRelay.shared.didFailToRegister(error: error)
+        }
+    }
+}
 
 @main
 struct ChromaScanRemoteApp: App {
+    @UIApplicationDelegateAdaptor(ChromaScanRemoteAppDelegate.self) private var appDelegate
     @State private var store = RemoteSessionStore()
     @Environment(\.scenePhase) private var scenePhase
 
@@ -15,8 +37,15 @@ struct ChromaScanRemoteApp: App {
                 }
             }
             .onChange(of: scenePhase) { _, newPhase in
-                if newPhase == .active {
+                switch newPhase {
+                case .active:
                     store.handleScenePhaseActive()
+                case .background:
+                    store.handleScenePhaseBackground()
+                case .inactive:
+                    break
+                @unknown default:
+                    break
                 }
             }
         }

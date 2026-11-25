@@ -3,6 +3,7 @@ import UIKit
 import ImageIO
 import Photos
 import Observation
+@preconcurrency import UserNotifications
 
 struct RemoteProgressState: Equatable, Sendable {
     let operation: CompanionOperation
@@ -61,16 +62,37 @@ final class RemoteSessionStore {
     var toastMessage: String?
     var errorAlert: RemoteErrorAlert?
     private(set) var isSavingToPhotos: Bool = false
+    private(set) var notifyOnScanComplete: Bool
+    private(set) var notificationAuthorizationStatus: UNAuthorizationStatus = .notDetermined
+    private(set) var apnsDeviceToken: String?
+    private(set) var hostAPNsConfigured: Bool = false
+    private(set) var isAppInBackground: Bool = false
+
+    var isDirectAPNsActive: Bool {
+        notifyOnScanComplete && hostAPNsConfigured && (apnsDeviceToken?.isEmpty == false)
+    }
+
+    var currentPushEnvironment: PushEnvironment {
+        #if DEBUG
+        return .sandbox
+        #else
+        return .production
+        #endif
+    }
+
+    private let userDefaults: UserDefaults
+    private let notifier: any ScanCompletionNotifying
+    private let backgroundTaskManager: any BackgroundTaskManaging
 
     // Manual connection persistence
     var lastManualHost: String {
-        get { UserDefaults.standard.string(forKey: "remote.lastManualHost") ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: "remote.lastManualHost") }
+        get { userDefaults.string(forKey: "remote.lastManualHost") ?? "" }
+        set { userDefaults.set(newValue, forKey: "remote.lastManualHost") }
     }
 
     var lastManualPort: String {
-        get { UserDefaults.standard.string(forKey: "remote.lastManualPort") ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: "remote.lastManualPort") }
+        get { userDefaults.string(forKey: "remote.lastManualPort") ?? "" }
+        set { userDefaults.set(newValue, forKey: "remote.lastManualPort") }
     }
 
     // Internal frame correlation
@@ -85,6 +107,9 @@ final class RemoteSessionStore {
     private var toastClearTask: Task<Void, Never>?
     private var imageDecodeTask: Task<Void, Never>?
     private var tileDecodeTask: Task<Void, Never>?
+    private var deferredEndBackgroundTask: Task<Void, Never>?
+
+    private static let notifyOnScanCompleteKey = "remote.notifyOnScanComplete"
 
     private struct FrameKey: Hashable {
         let kind: CompanionFrameKind
@@ -92,11 +117,38 @@ final class RemoteSessionStore {
         let requestID: UInt32
     }
 
-    init(clientName: String = UIDevice.current.name, tokenStore: KeychainTokenStore = KeychainTokenStore()) {
+    init(
+        clientName: String = UIDevice.current.name,
+        tokenStore: KeychainTokenStore = KeychainTokenStore(),
+        userDefaults: UserDefaults = .standard,
+        notifier: (any ScanCompletionNotifying)? = nil,
+        backgroundTaskManager: (any BackgroundTaskManaging)? = nil
+    ) {
+        self.userDefaults = userDefaults
+        if userDefaults.object(forKey: Self.notifyOnScanCompleteKey) == nil {
+            self.notifyOnScanComplete = true
+        } else {
+            self.notifyOnScanComplete = userDefaults.bool(forKey: Self.notifyOnScanCompleteKey)
+        }
+        if let notifier {
+            self.notifier = notifier
+        } else if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            self.notifier = NoOpScanCompletionNotifier()
+        } else {
+            self.notifier = UserNotificationScanNotifier.shared
+        }
+        self.backgroundTaskManager = backgroundTaskManager ?? UIApplicationBackgroundTaskManager()
         self.client = CompanionClient(clientName: clientName, tokenStore: tokenStore)
         wireClientCallbacks()
+        if notifier == nil && ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+            self.apnsDeviceToken = PushTokenRelay.shared.latestDeviceToken
+            PushTokenRelay.shared.onTokenUpdated = { [weak self] token in
+                self?.updateAPNsDeviceToken(token)
+            }
+        }
         browser.start()
         applyLaunchArgumentsIfPresent()
+        refreshNotificationAuthorizationStatus()
     }
 
     private func wireClientCallbacks() {
@@ -157,19 +209,109 @@ final class RemoteSessionStore {
     }
 
     func disconnect() {
+        endScanBackgroundTaskImmediately()
         client.disconnect(clearTarget: true)
         phase = .browsing
         snapshot = nil
         progress = nil
+        hostAPNsConfigured = false
         resetSessionImages()
         browser.start()
     }
 
     func handleScenePhaseActive() {
+        isAppInBackground = false
+        endScanBackgroundTaskImmediately()
+        refreshNotificationAuthorizationStatus()
         if case .browsing = phase {
             browser.start()
         } else {
             client.reconnectIfNeeded()
+        }
+    }
+
+    func handleScenePhaseBackground() {
+        isAppInBackground = true
+        guard notifyOnScanComplete, isScanActive, !isDirectAPNsActive else { return }
+        deferredEndBackgroundTask?.cancel()
+        deferredEndBackgroundTask = nil
+        backgroundTaskManager.beginTask(name: "ChromaScanActiveScan") { [weak self] in
+            self?.deferredEndBackgroundTask?.cancel()
+            self?.deferredEndBackgroundTask = nil
+        }
+    }
+
+    var isScanActive: Bool {
+        guard let snap = snapshot, snap.isBusy else { return false }
+        return (progress?.operation ?? snap.activeOperation) == .scan
+    }
+
+    func setNotifyOnScanComplete(_ enabled: Bool) {
+        notifyOnScanComplete = enabled
+        userDefaults.set(enabled, forKey: Self.notifyOnScanCompleteKey)
+        if enabled {
+            requestNotificationPermissionIfNeeded()
+        } else {
+            endScanBackgroundTaskImmediately()
+        }
+        syncPushRegistrationWithHost()
+    }
+
+    func updateAPNsDeviceToken(_ token: String) {
+        let clean = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        apnsDeviceToken = clean
+        syncPushRegistrationWithHost()
+    }
+
+    func refreshNotificationAuthorizationStatus() {
+        Task { [weak self] in
+            guard let self else { return }
+            let status = await self.notifier.authorizationStatus()
+            self.notificationAuthorizationStatus = status
+            if self.notifyOnScanComplete,
+               (status == .authorized || status == .provisional || status == .ephemeral) {
+                await self.notifier.registerForRemoteNotifications()
+            }
+        }
+    }
+
+    private func requestNotificationPermissionIfNeeded() {
+        Task { [weak self] in
+            guard let self else { return }
+            let status = await self.notifier.requestAuthorizationIfNeeded()
+            self.notificationAuthorizationStatus = status
+            if self.notifyOnScanComplete,
+               (status == .authorized || status == .provisional || status == .ephemeral) {
+                await self.notifier.registerForRemoteNotifications()
+            }
+        }
+    }
+
+    private func syncPushRegistrationWithHost() {
+        guard case .connected = phase else { return }
+        client.send(.registerPushToken(
+            deviceToken: notifyOnScanComplete ? apnsDeviceToken : nil,
+            environment: currentPushEnvironment,
+            enabled: notifyOnScanComplete,
+            bundleID: Bundle.main.bundleIdentifier
+        ))
+    }
+
+    private func endScanBackgroundTaskImmediately() {
+        deferredEndBackgroundTask?.cancel()
+        deferredEndBackgroundTask = nil
+        backgroundTaskManager.endTask()
+    }
+
+    private func scheduleDeferredEndScanBackgroundTask() {
+        guard backgroundTaskManager.hasActiveTask else { return }
+        deferredEndBackgroundTask?.cancel()
+        deferredEndBackgroundTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.5))
+            guard let self, !Task.isCancelled else { return }
+            self.deferredEndBackgroundTask = nil
+            self.backgroundTaskManager.endTask()
         }
     }
 
@@ -310,6 +452,9 @@ final class RemoteSessionStore {
     }
 
     func triggerScan() {
+        if notifyOnScanComplete {
+            requestNotificationPermissionIfNeeded()
+        }
         client.send(.triggerScan)
     }
 
@@ -502,12 +647,12 @@ final class RemoteSessionStore {
         )
     }
 
-    static func formatMegabytes(_ bytes: Int64) -> String {
+    nonisolated static func formatMegabytes(_ bytes: Int64) -> String {
         let mb = Double(max(0, bytes)) / (1024.0 * 1024.0)
         return String(format: "%.1f MB", mb)
     }
 
-    static func formatElapsedSeconds(_ seconds: Double) -> String {
+    nonisolated static func formatElapsedSeconds(_ seconds: Double) -> String {
         let total = max(0, Int(seconds.rounded()))
         if total >= 60 {
             let mins = total / 60
@@ -525,6 +670,8 @@ final class RemoteSessionStore {
             client.saveAuthToken(authToken, hostID: hostID)
             phase = .connected(hostID: hostID, hostName: hostName)
             applyIncomingSnapshot(snap)
+            syncPushRegistrationWithHost()
+            refreshNotificationAuthorizationStatus()
 
         case .authRequired(let hostID, let hostName, let reason):
             if let reason, !reason.isEmpty {
@@ -553,18 +700,32 @@ final class RemoteSessionStore {
                 }
             }
 
-        case .scanCompleted(let filename, let pxW, let pxH, let bytes, _):
+        case .scanCompleted(let filename, let pxW, let pxH, let bytes, let elapsedSeconds):
             progress = nil
             let mb = Double(bytes) / (1024.0 * 1024.0)
             showToast(String(format: "Saved %@ (%dx%d · %.1f MB)", filename, pxW, pxH, mb))
+            handleScanCompletedNotification(
+                filename: filename,
+                pixelWidth: pxW,
+                pixelHeight: pxH,
+                fileSizeBytes: bytes,
+                elapsedSeconds: elapsedSeconds
+            )
 
         case .exportCompleted(let filename, let bytes, _):
             progress = nil
             let mb = Double(bytes) / (1024.0 * 1024.0)
             showToast(String(format: "Exported %@ (%.1f MB)", filename, mb))
 
+        case .pushStatus(let apnsConfigured):
+            hostAPNsConfigured = apnsConfigured
+            if apnsConfigured && notifyOnScanComplete {
+                requestNotificationPermissionIfNeeded()
+            }
+
         case .error(let title, let message):
             isSavingToPhotos = false
+            endScanBackgroundTaskImmediately()
             errorAlert = RemoteErrorAlert(title: title, message: message)
 
         case .pong:
@@ -572,13 +733,59 @@ final class RemoteSessionStore {
         }
     }
 
+    private func handleScanCompletedNotification(
+        filename: String,
+        pixelWidth: Int,
+        pixelHeight: Int,
+        fileSizeBytes: Int64,
+        elapsedSeconds: Double
+    ) {
+        deferredEndBackgroundTask?.cancel()
+        deferredEndBackgroundTask = nil
+
+        guard notifyOnScanComplete else {
+            backgroundTaskManager.endTask()
+            return
+        }
+
+        // When backgrounded with Direct Mac -> APNs active, let the Mac's APNs push
+        // deliver the single lock-screen alert to avoid duplicate notifications.
+        if isAppInBackground && isDirectAPNsActive {
+            backgroundTaskManager.endTask()
+            return
+        }
+
+        let payload = ScanCompletionNotificationPayload(
+            filename: filename,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight,
+            fileSizeBytes: fileSizeBytes,
+            elapsedSeconds: elapsedSeconds
+        )
+
+        Task { [weak self] in
+            guard let self else { return }
+            await self.notifier.postScanCompleted(payload)
+            self.notificationAuthorizationStatus = await self.notifier.authorizationStatus()
+            self.backgroundTaskManager.endTask()
+        }
+    }
+
     private func applyIncomingSnapshot(_ snap: SessionSnapshot) {
+        let wasScanActive = isScanActive
         let modeChanged = (snapshot?.viewMode != snap.viewMode)
         let genChanged = (snapshot?.activeImageGeneration != snap.activeImageGeneration)
         snapshot = snap
 
         if !snap.isBusy {
             progress = nil
+        }
+
+        let nowScanActive = isScanActive
+        if !wasScanActive && nowScanActive && notifyOnScanComplete {
+            requestNotificationPermissionIfNeeded()
+        } else if wasScanActive && !nowScanActive {
+            scheduleDeferredEndScanBackgroundTask()
         }
 
         if modeChanged || genChanged {

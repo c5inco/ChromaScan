@@ -88,6 +88,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.chromascan.remote
         PRODUCT_NAME: ChromaScanRemote
         INFOPLIST_FILE: Resources/iOSInfo.plist
+        CODE_SIGN_ENTITLEMENTS: Resources/ChromaScanRemote.entitlements
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

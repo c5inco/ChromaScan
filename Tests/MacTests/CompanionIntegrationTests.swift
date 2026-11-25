@@ -2,6 +2,7 @@ import XCTest
 import Network
 import ImageIO
 import CoreGraphics
+import CryptoKit
 @testable import ChromaScan
 
 /// End-to-end loopback WebSocket integration tests proving real `NWListener` + `NWProtocolWebSocket`
@@ -176,6 +177,107 @@ final class CompanionIntegrationTests: XCTestCase {
         guard case .authRequired = revokedResp else { return XCTFail("Revoked token must require auth") }
     }
 
+    func testDirectMacToAPNsPushOnScanCompleteEvenWhenClientDisconnected() async throws {
+        let suite = "com.chromascan.apns.integration.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let prefs = AppPreferences(defaults: defaults)
+        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("chromascan-apns-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let testKey = P256.Signing.PrivateKey()
+        prefs.saveFolderURL = tmpDir
+        prefs.pairingPIN = "654321"
+        prefs.baseFilename = "push-test-001"
+        prefs.resolution = 300
+        prefs.apnsKeyID = "9A8B7C6D5E"
+        prefs.apnsTeamID = "FXB7YX3ZD4"
+        prefs.apnsBundleID = "com.chromascan.remote"
+        prefs.apnsPrivateKeyPEM = testKey.pemRepresentation
+
+        let mockAPNs = RecordingAPNsClient(result: .delivered(environment: .production))
+        let browser = MockScannerBrowser()
+        let esclClient = MockESCLClient()
+        let engine = ScanSessionEngine(preferences: prefs, browser: browser, client: esclClient)
+        let server = CompanionServer(
+            engine: engine,
+            preferences: prefs,
+            advertiseBonjour: false,
+            port: 0,
+            apnsClient: mockAPNs
+        )
+
+        let scanner = DiscoveredScanner(
+            id: "hp-3830",
+            name: "HP OfficeJet 3830",
+            host: "hp3830.local",
+            port: 8080,
+            useTLS: false,
+            rootPath: "eSCL",
+            modelName: "OfficeJet 3830",
+            uuid: "hp-3830"
+        )
+        engine.startDiscovery()
+        browser.emit([scanner])
+        try await waitUntil(timeout: 2.0) { engine.capabilities != nil }
+
+        server.start()
+        defer { server.stop() }
+        try await waitUntil(timeout: 3.0) { server.isRunning && server.port != nil }
+        let port = try XCTUnwrap(server.port)
+
+        // Pair iPhone and register its APNs token
+        let ws = TestWebSocketClient(port: port)
+        try await ws.connect()
+        ws.send(.hello(protocolVersion: 1, clientName: "Locked iPhone", pin: "654321", authToken: nil))
+        _ = try await ws.waitForHostMessage(timeout: 2.0) {
+            if case .welcome = $0 { return true }
+            return false
+        }
+        let pushStatus = try await ws.waitForHostMessage(timeout: 2.0) {
+            if case .pushStatus = $0 { return true }
+            return false
+        }
+        XCTAssertEqual(pushStatus, .pushStatus(apnsConfigured: true))
+
+        ws.send(.registerPushToken(
+            deviceToken: "aabbccddeeff00112233",
+            environment: .sandbox,
+            enabled: true,
+            bundleID: "com.example.custom.remote"
+        ))
+        try await waitUntil(timeout: 2.0) {
+            prefs.pushEligibleDevices.first?.apnsDeviceToken == "aabbccddeeff00112233"
+        }
+
+        // Disconnect WebSocket (simulates iPhone locked and suspended for minutes!)
+        ws.close()
+        try await waitUntil(timeout: 2.0) { server.connectedClients.isEmpty }
+
+        // Complete a scan on the Mac while iPhone is disconnected
+        engine.startScan()
+        try await waitUntil(timeout: 5.0) {
+            server.lastPushSucceeded == true
+        }
+
+        let deliveries = await mockAPNs.deliveries
+        XCTAssertEqual(deliveries.count, 1)
+        XCTAssertEqual(deliveries.first?.deviceToken, "aabbccddeeff00112233")
+        XCTAssertEqual(deliveries.first?.bundleID, "com.example.custom.remote")
+        XCTAssertEqual(deliveries.first?.notification.title, "Scan Complete")
+        XCTAssertTrue(deliveries.first?.notification.body.contains("push-test-001.tiff") == true)
+        // Auto-updated environment persisted after sandbox -> production delivery
+        XCTAssertEqual(prefs.pushEligibleDevices.first?.apnsEnvironment, .production)
+
+        // Unregistered token (HTTP 410) clears stale token cleanly
+        await mockAPNs.setResult(.unregistered)
+        let ok = await server.sendTestPush()
+        XCTAssertFalse(ok)
+        XCTAssertTrue(prefs.pushEligibleDevices.isEmpty)
+    }
+
     private func waitUntil(timeout: TimeInterval, condition: @escaping @MainActor () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition() {
@@ -318,5 +420,40 @@ private final class TestWebSocketClient {
                 self.receiveLoop()
             }
         }
+    }
+}
+
+private actor RecordingAPNsClient: APNsPushing {
+    struct Delivery: Equatable, Sendable {
+        let notification: APNsNotificationContent
+        let deviceToken: String
+        let preferredEnvironment: PushEnvironment
+        let bundleID: String
+    }
+
+    private var nextResult: APNsDeliveryResult
+    private(set) var deliveries: [Delivery] = []
+
+    init(result: APNsDeliveryResult) {
+        self.nextResult = result
+    }
+
+    func setResult(_ result: APNsDeliveryResult) {
+        self.nextResult = result
+    }
+
+    func send(
+        notification: APNsNotificationContent,
+        toDeviceToken deviceToken: String,
+        preferredEnvironment: PushEnvironment,
+        configuration: APNsConfiguration
+    ) async -> APNsDeliveryResult {
+        deliveries.append(Delivery(
+            notification: notification,
+            deviceToken: deviceToken,
+            preferredEnvironment: preferredEnvironment,
+            bundleID: configuration.bundleID
+        ))
+        return nextResult
     }
 }

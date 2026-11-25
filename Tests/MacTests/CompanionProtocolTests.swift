@@ -1,6 +1,7 @@
 import XCTest
 import CoreGraphics
 import ImageIO
+import CryptoKit
 @testable import ChromaScan
 
 final class CompanionProtocolTests: XCTestCase {
@@ -34,6 +35,8 @@ final class CompanionProtocolTests: XCTestCase {
                 maxPixelWidth: 1600
             ),
             .requestPhotosCopy(requestID: 7, format: .heic, quality: 0.92),
+            .registerPushToken(deviceToken: "aabbccddeeff00112233", environment: .sandbox, enabled: true, bundleID: "com.alice.chromascan.remote"),
+            .registerPushToken(deviceToken: nil, environment: .production, enabled: false, bundleID: nil),
             .ping
         ]
 
@@ -106,6 +109,7 @@ final class CompanionProtocolTests: XCTestCase {
             .imageReady(info),
             .scanCompleted(filename: "scan-004.tiff", pixelWidth: 10200, pixelHeight: 13200, fileSizeBytes: 214_958_080, elapsedSeconds: 168.2),
             .exportCompleted(filename: "scan-005.heic", fileSizeBytes: 4_200_000, elapsedSeconds: 0.45),
+            .pushStatus(apnsConfigured: true),
             .error(title: "Scan Failed", message: "HTTP 409 Conflict"),
             .pong
         ]
@@ -207,5 +211,153 @@ final class CompanionProtocolTests: XCTestCase {
         XCTAssertEqual(decodedTile.width, 200)
         XCTAssertEqual(decodedTile.height, 150)
         XCTAssertEqual(decodedTile.colorSpace?.name as String?, CGColorSpace.displayP3 as String)
+    }
+
+    func testAPNsJWTGenerationAndSignatureVerification() throws {
+        XCTAssertEqual(APNsConfiguration.extractKeyID(fromFilename: "AuthKey_9A8B7C6D5E.p8"), "9A8B7C6D5E")
+        XCTAssertNil(APNsConfiguration.extractKeyID(fromFilename: "random.p8"))
+
+        let key = P256.Signing.PrivateKey()
+        let config = APNsConfiguration(
+            keyID: "9A8B7C6D5E",
+            teamID: "FXB7YX3ZD4",
+            bundleID: "com.chromascan.remote",
+            privateKeyPEM: key.pemRepresentation
+        )
+        let issuedAt = Date(timeIntervalSince1970: 1_750_000_000)
+        let jwt = try APNsJWTGenerator.generateToken(configuration: config, issuedAt: issuedAt)
+
+        let parts = jwt.split(separator: ".")
+        XCTAssertEqual(parts.count, 3)
+
+        func base64URLDecode(_ s: Substring) throws -> Data {
+            var str = s.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+            while str.count % 4 != 0 { str.append("=") }
+            return try XCTUnwrap(Data(base64Encoded: str))
+        }
+
+        let header = try XCTUnwrap(JSONSerialization.jsonObject(with: try base64URLDecode(parts[0])) as? [String: Any])
+        XCTAssertEqual(header["alg"] as? String, "ES256")
+        XCTAssertEqual(header["kid"] as? String, "9A8B7C6D5E")
+
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: try base64URLDecode(parts[1])) as? [String: Any])
+        XCTAssertEqual(payload["iss"] as? String, "FXB7YX3ZD4")
+        XCTAssertEqual(payload["iat"] as? Int, 1_750_000_000)
+
+        let rawSig = try base64URLDecode(parts[2])
+        XCTAssertEqual(rawSig.count, 64)
+        let sig = try P256.Signing.ECDSASignature(rawRepresentation: rawSig)
+        let signingInput = Data("\(parts[0]).\(parts[1])".utf8)
+        XCTAssertTrue(key.publicKey.isValidSignature(sig, for: signingInput))
+    }
+
+    func testAPNsClientFallbackOnBadDeviceTokenAndUnregisteredHandling() async throws {
+        let key = P256.Signing.PrivateKey()
+        let config = APNsConfiguration(
+            keyID: "9A8B7C6D5E",
+            teamID: "FXB7YX3ZD4",
+            bundleID: "com.chromascan.remote",
+            privateKeyPEM: key.pemRepresentation
+        )
+
+        let transport = MockAPNsHTTPTransport { request in
+            let url = try XCTUnwrap(request.url)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "apns-topic"), "com.chromascan.remote")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "apns-push-type"), "alert")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "apns-priority"), "10")
+            XCTAssertTrue(request.value(forHTTPHeaderField: "authorization")?.hasPrefix("bearer ") == true)
+
+            if url.host == "api.sandbox.push.apple.com" {
+                let resp = HTTPURLResponse(url: url, statusCode: 400, httpVersion: "2.0", headerFields: nil)!
+                return (Data(#"{"reason":"BadDeviceToken"}"#.utf8), resp)
+            } else {
+                let resp = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "2.0", headerFields: nil)!
+                return (Data(), resp)
+            }
+        }
+
+        let client = APNsClient(transport: transport)
+        let content = APNsNotificationContent.scanCompleted(
+            filename: "art-001.tiff",
+            pixelWidth: 4800,
+            pixelHeight: 6400,
+            fileSizeBytes: 52_428_800,
+            elapsedSeconds: 95
+        )
+        let result = await client.send(
+            notification: content,
+            toDeviceToken: "deadbeef00112233",
+            preferredEnvironment: .sandbox,
+            configuration: config
+        )
+        XCTAssertEqual(result, .delivered(environment: .production))
+        let requestedHosts = await transport.recordedHosts
+        XCTAssertEqual(requestedHosts, ["api.sandbox.push.apple.com", "api.push.apple.com"])
+
+        // 410 Unregistered handling
+        let unregTransport = MockAPNsHTTPTransport { request in
+            let url = try XCTUnwrap(request.url)
+            let resp = HTTPURLResponse(url: url, statusCode: 410, httpVersion: "2.0", headerFields: nil)!
+            return (Data(#"{"reason":"Unregistered"}"#.utf8), resp)
+        }
+        let unregClient = APNsClient(transport: unregTransport)
+        let unregResult = await unregClient.send(
+            notification: content,
+            toDeviceToken: "stale0011",
+            preferredEnvironment: .production,
+            configuration: config
+        )
+        XCTAssertEqual(unregResult, .unregistered)
+    }
+
+    @MainActor
+    func testLocalAPNSDirectoryAutoDiscovery() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("chromascan-apns-dir-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let key = P256.Signing.PrivateKey()
+        try key.pemRepresentation.write(
+            to: dir.appendingPathComponent("AuthKey_9A8B7C6D5E.p8"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try """
+        # Local APNs config
+        export APNS_TEAM_ID="TEAM123456"
+        """.write(
+            to: dir.appendingPathComponent("apns.env"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let suite = "com.chromascan.localapns.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let prefs = AppPreferences(defaults: defaults, apnsDirectoryURL: dir)
+        XCTAssertTrue(prefs.isAPNsConfigured)
+        XCTAssertTrue(prefs.isUsingLocalAPNsDirectoryKey)
+        let config = try XCTUnwrap(prefs.apnsConfiguration)
+        XCTAssertEqual(config.keyID, "9A8B7C6D5E")
+        XCTAssertEqual(config.teamID, "TEAM123456")
+        XCTAssertEqual(config.bundleID, "com.chromascan.remote")
+    }
+}
+
+private actor MockAPNsHTTPTransport: APNsHTTPTransport {
+    private let handler: @Sendable (URLRequest) throws -> (Data, HTTPURLResponse)
+    private(set) var recordedHosts: [String] = []
+
+    init(handler: @escaping @Sendable (URLRequest) throws -> (Data, HTTPURLResponse)) {
+        self.handler = handler
+    }
+
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        if let host = request.url?.host {
+            recordedHosts.append(host)
+        }
+        return try handler(request)
     }
 }

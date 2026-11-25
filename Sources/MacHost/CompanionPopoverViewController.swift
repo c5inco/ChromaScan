@@ -1,7 +1,8 @@
 import AppKit
+import UniformTypeIdentifiers
 
 /// Popover anchored to the toolbar Companion button showing server status, 6-digit Pairing PIN,
-/// connected iPhones, device revocation, and optional background menu bar mode.
+/// connected iPhones, APNs push configuration, device revocation, and optional background menu bar mode.
 @MainActor
 final class CompanionPopoverViewController: NSViewController {
     private let server: CompanionServer
@@ -15,6 +16,10 @@ final class CompanionPopoverViewController: NSViewController {
     private let connectedStack = NSStackView()
     private let pairedCountLabel = NSTextField(labelWithString: "")
     private let revokeButton = NSButton(title: "Revoke All", target: nil, action: nil)
+    private let pushStatusLabel = NSTextField(wrappingLabelWithString: "")
+    private let pushDeliveryLabel = NSTextField(wrappingLabelWithString: "")
+    private let configureAPNsButton = NSButton(title: "Configure APNs…", target: nil, action: nil)
+    private let testPushButton = NSButton(title: "Send Test Push", target: nil, action: nil)
     private let menuBarCheck = NSButton(checkboxWithTitle: "Keep running in menu bar when window closes", target: nil, action: nil)
 
     init(server: CompanionServer, preferences: AppPreferences) {
@@ -121,6 +126,43 @@ final class CompanionPopoverViewController: NSViewController {
 
         stack.addArrangedSubview(makeSeparator())
 
+        // Direct Mac -> APNs Push Notifications
+        let pushHeader = NSTextField(labelWithString: "IPHONE PUSH (APNS)")
+        pushHeader.font = NSFont.systemFont(ofSize: 10.5, weight: .semibold)
+        pushHeader.textColor = .secondaryLabelColor
+        stack.addArrangedSubview(pushHeader)
+
+        pushStatusLabel.font = NSFont.systemFont(ofSize: 11.5)
+        pushStatusLabel.textColor = .secondaryLabelColor
+        stack.addArrangedSubview(pushStatusLabel)
+        pushStatusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true
+
+        pushDeliveryLabel.font = NSFont.systemFont(ofSize: 11)
+        pushDeliveryLabel.textColor = .secondaryLabelColor
+        pushDeliveryLabel.isHidden = true
+        stack.addArrangedSubview(pushDeliveryLabel)
+        pushDeliveryLabel.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true
+
+        let pushButtonsRow = NSStackView()
+        pushButtonsRow.orientation = .horizontal
+        pushButtonsRow.alignment = .centerY
+        pushButtonsRow.spacing = 8
+        configureAPNsButton.bezelStyle = .rounded
+        configureAPNsButton.controlSize = .small
+        configureAPNsButton.target = self
+        configureAPNsButton.action = #selector(configureAPNsClicked)
+        testPushButton.bezelStyle = .rounded
+        testPushButton.controlSize = .small
+        testPushButton.target = self
+        testPushButton.action = #selector(sendTestPushClicked)
+        pushButtonsRow.addArrangedSubview(configureAPNsButton)
+        pushButtonsRow.addArrangedSubview(testPushButton)
+        pushButtonsRow.addArrangedSubview(NSView())
+        stack.addArrangedSubview(pushButtonsRow)
+        pushButtonsRow.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true
+
+        stack.addArrangedSubview(makeSeparator())
+
         menuBarCheck.controlSize = .small
         menuBarCheck.font = NSFont.systemFont(ofSize: 11.5)
         menuBarCheck.target = self
@@ -188,6 +230,32 @@ final class CompanionPopoverViewController: NSViewController {
         let pairedCount = preferences.pairedDevices.count
         pairedCountLabel.stringValue = pairedCount == 1 ? "1 paired device" : "\(pairedCount) paired devices"
         revokeButton.isEnabled = pairedCount > 0
+
+        let pushReadyCount = preferences.pushEligibleDevices.count
+        if let activeConfig = preferences.apnsConfiguration {
+            let readyText = pushReadyCount == 1 ? "1 push-ready iPhone" : "\(pushReadyCount) push-ready iPhones"
+            let sourceSuffix = preferences.isUsingLocalAPNsDirectoryKey ? " (~/.apns)" : ""
+            pushStatusLabel.stringValue = "Key \(activeConfig.keyID)\(sourceSuffix) · \(readyText)"
+            pushStatusLabel.textColor = pushReadyCount > 0 ? .systemGreen : .secondaryLabelColor
+            configureAPNsButton.title = "Edit APNs…"
+        } else if let local = preferences.discoveredLocalAPNsConfig, let keyFile = local.keyFilename {
+            pushStatusLabel.stringValue = "Found ~/.apns/\(keyFile) — add your Apple Team ID to enable push."
+            pushStatusLabel.textColor = .systemOrange
+            configureAPNsButton.title = "Configure APNs…"
+        } else {
+            pushStatusLabel.stringValue = "Not configured — add an Apple APNs .p8 key (or place it in ~/.apns/) for lock-screen scan alerts."
+            pushStatusLabel.textColor = .secondaryLabelColor
+            configureAPNsButton.title = "Configure APNs…"
+        }
+        testPushButton.isEnabled = preferences.isAPNsConfigured && pushReadyCount > 0
+
+        if let delivery = server.lastPushStatus, !delivery.isEmpty {
+            pushDeliveryLabel.stringValue = delivery
+            pushDeliveryLabel.textColor = (server.lastPushSucceeded == false) ? .systemRed : .secondaryLabelColor
+            pushDeliveryLabel.isHidden = false
+        } else {
+            pushDeliveryLabel.isHidden = true
+        }
     }
 
     private func makeSeparator() -> NSBox {
@@ -223,5 +291,176 @@ final class CompanionPopoverViewController: NSViewController {
         let on = (menuBarCheck.state == .on)
         preferences.keepRunningInMenuBar = on
         onMenuBarModeChanged?(on)
+    }
+
+    @objc private func sendTestPushClicked() {
+        testPushButton.isEnabled = false
+        Task { [weak self] in
+            guard let self else { return }
+            _ = await self.server.sendTestPush()
+            self.refreshUI()
+        }
+    }
+
+    @objc private func configureAPNsClicked() {
+        let alert = NSAlert()
+        alert.messageText = "Direct APNs Push Notifications"
+        alert.informativeText = "Select an Apple Push Notifications (.p8) key from Apple Developer → Certificates, Identifiers & Profiles → Keys (or place AuthKey_<KEYID>.p8 and apns.env in ~/.apns/)."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        if preferences.apnsPrivateKeyPEM != nil || !preferences.apnsKeyID.isEmpty || !preferences.apnsTeamID.isEmpty {
+            alert.addButton(withTitle: "Remove Saved Key")
+        }
+
+        let container = NSStackView()
+        container.orientation = .vertical
+        container.alignment = .leading
+        container.spacing = 8
+        container.frame = NSRect(x: 0, y: 0, width: 340, height: 158)
+
+        let keyIDField = NSTextField(string: preferences.effectiveAPNsKeyID)
+        keyIDField.placeholderString = "10-character Key ID (e.g. 9A8B7C6D5E)"
+        let teamIDField = NSTextField(string: preferences.effectiveAPNsTeamID)
+        teamIDField.placeholderString = "10-character Apple Team ID"
+        let bundleIDField = NSTextField(string: preferences.apnsBundleID)
+        bundleIDField.placeholderString = "iOS Bundle ID (auto-detected when paired)"
+
+        let initialPEM = preferences.effectiveAPNsPrivateKeyPEM
+        let initialStatusText: String
+        if preferences.apnsPrivateKeyPEM != nil {
+            initialStatusText = "Stored in Keychain (.p8 loaded)"
+        } else if let file = preferences.discoveredLocalAPNsConfig?.keyFilename {
+            initialStatusText = "Auto-loaded ~/.apns/\(file)"
+        } else {
+            initialStatusText = "No .p8 key file selected"
+        }
+        let keyStatusLabel = NSTextField(labelWithString: initialStatusText)
+        keyStatusLabel.font = NSFont.systemFont(ofSize: 11)
+        keyStatusLabel.textColor = initialPEM != nil ? .systemGreen : .secondaryLabelColor
+
+        let pickerHandler = APNsKeyPickerHandler(
+            initialPEM: initialPEM,
+            keyIDField: keyIDField,
+            statusLabel: keyStatusLabel
+        )
+        let chooseKeyButton = NSButton(title: "Choose .p8 Key File…", target: pickerHandler, action: #selector(APNsKeyPickerHandler.chooseKeyFile))
+        chooseKeyButton.bezelStyle = .rounded
+        chooseKeyButton.controlSize = .small
+
+        func labeledRow(_ title: String, field: NSTextField) -> NSStackView {
+            let row = NSStackView()
+            row.orientation = .horizontal
+            row.alignment = .centerY
+            row.spacing = 8
+            let lbl = NSTextField(labelWithString: title)
+            lbl.font = NSFont.systemFont(ofSize: 12)
+            lbl.alignment = .right
+            lbl.widthAnchor.constraint(equalToConstant: 82).isActive = true
+            field.widthAnchor.constraint(equalToConstant: 248).isActive = true
+            row.addArrangedSubview(lbl)
+            row.addArrangedSubview(field)
+            return row
+        }
+
+        let keyRow = NSStackView()
+        keyRow.orientation = .horizontal
+        keyRow.alignment = .centerY
+        keyRow.spacing = 8
+        keyRow.addArrangedSubview(chooseKeyButton)
+        keyRow.addArrangedSubview(keyStatusLabel)
+
+        container.addArrangedSubview(keyRow)
+        container.addArrangedSubview(labeledRow("Key ID:", field: keyIDField))
+        container.addArrangedSubview(labeledRow("Team ID:", field: teamIDField))
+        container.addArrangedSubview(labeledRow("Bundle ID:", field: bundleIDField))
+
+        alert.accessoryView = container
+
+        let response = alert.runModal()
+        _ = pickerHandler // retain during modal run
+
+        switch response {
+        case .alertFirstButtonReturn:
+            let keyID = keyIDField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            let teamID = teamIDField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            let bundleID = bundleIDField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let pem = pickerHandler.selectedPEM, !pem.isEmpty else {
+                presentValidationError("Select a valid Apple APNs .p8 private key file before saving.")
+                return
+            }
+            guard !keyID.isEmpty, !teamID.isEmpty, !bundleID.isEmpty else {
+                presentValidationError("Key ID, Team ID, and iOS Bundle ID are all required.")
+                return
+            }
+            do {
+                _ = try APNsConfiguration.validatePrivateKeyPEM(pem)
+            } catch {
+                presentValidationError("The selected .p8 file is not a valid P-256 private key: \(error.localizedDescription)")
+                return
+            }
+            preferences.apnsKeyID = keyID
+            preferences.apnsTeamID = teamID
+            preferences.apnsBundleID = bundleID
+            preferences.apnsPrivateKeyPEM = pem
+            server.notifyAPNsConfigurationChanged()
+            refreshUI()
+
+        case .alertThirdButtonReturn:
+            preferences.clearAPNsConfiguration()
+            server.notifyAPNsConfigurationChanged()
+            refreshUI()
+
+        default:
+            break
+        }
+    }
+
+    private func presentValidationError(_ message: String) {
+        let err = NSAlert()
+        err.alertStyle = .warning
+        err.messageText = "Invalid APNs Configuration"
+        err.informativeText = message
+        err.runModal()
+    }
+}
+
+@MainActor
+private final class APNsKeyPickerHandler: NSObject {
+    var selectedPEM: String?
+    private let keyIDField: NSTextField
+    private let statusLabel: NSTextField
+
+    init(initialPEM: String?, keyIDField: NSTextField, statusLabel: NSTextField) {
+        self.selectedPEM = initialPEM
+        self.keyIDField = keyIDField
+        self.statusLabel = statusLabel
+    }
+
+    @objc func chooseKeyFile() {
+        let panel = NSOpenPanel()
+        panel.title = "Select Apple APNs Auth Key (.p8)"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.showsHiddenFiles = true
+        if let p8Type = UTType(filenameExtension: "p8") {
+            panel.allowedContentTypes = [p8Type, .text, .data]
+        }
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let pem = try String(contentsOf: url, encoding: .utf8)
+            _ = try APNsConfiguration.validatePrivateKeyPEM(pem)
+            selectedPEM = pem
+            statusLabel.stringValue = "Loaded \(url.lastPathComponent)"
+            statusLabel.textColor = .systemGreen
+            if keyIDField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               let extracted = APNsConfiguration.extractKeyID(fromFilename: url.lastPathComponent) {
+                keyIDField.stringValue = extracted
+            }
+        } catch {
+            statusLabel.stringValue = "Invalid .p8 key file"
+            statusLabel.textColor = .systemRed
+        }
     }
 }
