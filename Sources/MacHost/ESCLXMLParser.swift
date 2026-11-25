@@ -293,6 +293,77 @@ final class StatusXMLParser: NSObject, XMLParserDelegate {
     }
 }
 
+// MARK: - ScannerStatus Jobs Parser
+
+/// One `<scan:JobInfo>` entry from `/eSCL/ScannerStatus`.
+struct ESCLJobInfo: Equatable, Sendable {
+    let uri: String
+    let uuid: String?
+    let state: String
+    let stateReasons: [String]
+
+    /// Job is still occupying the scanner (not yet Completed / Canceled / Aborted).
+    var isActive: Bool { state == "Processing" || state == "Pending" }
+
+    /// Stable identifier: UUID if present, else the last path component of the URI.
+    var jobID: String { uuid ?? (uri.split(separator: "/").last.map(String.init) ?? uri) }
+}
+
+final class ScannerJobsXMLParser: NSObject, XMLParserDelegate {
+    private var currentText = ""
+    private var jobs: [ESCLJobInfo] = []
+    private var inJob = false
+    private var uri: String?
+    private var uuid: String?
+    private var state: String?
+    private var reasons: [String] = []
+
+    static func parse(_ data: Data) -> [ESCLJobInfo] {
+        let handler = ScannerJobsXMLParser()
+        let parser = XMLParser(data: data)
+        parser.shouldProcessNamespaces = true
+        parser.delegate = handler
+        _ = parser.parse()
+        return handler.jobs
+    }
+
+    private func localName(_ name: String) -> String {
+        if let idx = name.lastIndex(of: ":") { return String(name[name.index(after: idx)...]) }
+        return name
+    }
+
+    func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {
+        currentText = ""
+        if localName(elementName) == "JobInfo" {
+            inJob = true
+            uri = nil; uuid = nil; state = nil; reasons = []
+        }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        currentText += string
+    }
+
+    func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
+        let name = localName(elementName)
+        let text = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        currentText = ""
+        guard inJob else { return }
+        switch name {
+        case "JobUri": uri = text
+        case "JobUuid": uuid = text.isEmpty ? nil : text
+        case "JobState": state = text
+        case "JobStateReason": if !text.isEmpty { reasons.append(text) }
+        case "JobInfo":
+            inJob = false
+            if let uri, !uri.isEmpty {
+                jobs.append(ESCLJobInfo(uri: uri, uuid: uuid, state: state ?? "Unknown", stateReasons: reasons))
+            }
+        default: break
+        }
+    }
+}
+
 // MARK: - ScanImageInfo Parser
 
 final class ScanImageInfoXMLParser: NSObject, XMLParserDelegate {

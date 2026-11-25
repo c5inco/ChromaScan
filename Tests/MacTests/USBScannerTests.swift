@@ -389,7 +389,7 @@ final class USBScannerTests: XCTestCase {
         XCTAssertEqual(bridge.openChannelCount, 0)
 
         let scanner = makeUSBScanner(id: "usb:MOCK3830", port: Int(port))
-        let client = ESCLClient()
+        let client = ESCLClient(ownedJobsSuiteName: "com.chromascan.tests.escl-owned-jobs")
 
         // Concurrent capabilities + chunked status across 2 slots
         async let capsTask = client.fetchCapabilities(from: scanner)
@@ -447,7 +447,7 @@ final class USBScannerTests: XCTestCase {
         }
         let openPort = try openFailBridge.start()
         defer { openFailBridge.stop() }
-        let client = ESCLClient()
+        let client = ESCLClient(ownedJobsSuiteName: "com.chromascan.tests.escl-owned-jobs")
         let status = try await client.fetchStatus(from: makeUSBScanner(id: "usb:OPEN", port: Int(openPort)))
         XCTAssertEqual(status.state, "Idle")
 
@@ -491,7 +491,7 @@ final class USBScannerTests: XCTestCase {
         let port = try continueBridge.start()
         defer { continueBridge.stop() }
         let scanner = makeUSBScanner(id: "usb:100", port: Int(port))
-        let client = ESCLClient()
+        let client = ESCLClient(ownedJobsSuiteName: "com.chromascan.tests.escl-owned-jobs")
 
         let status1 = try await client.fetchStatus(from: scanner)
         XCTAssertEqual(status1.state, "Idle")

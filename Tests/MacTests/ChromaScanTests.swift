@@ -337,4 +337,48 @@ final class ChromaScanTests: XCTestCase {
         XCTAssertEqual(flatbedRect.width, 491.0 / 523.0, accuracy: 0.01)
         XCTAssertEqual(flatbedRect.height, 622.0 / 720.0, accuracy: 0.01)
     }
+
+    // MARK: - ScannerStatus job list (leftover-job cleanup)
+
+    func testScannerJobsParserExtractsActiveAndFinishedJobs() {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <scan:ScannerStatus xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
+          <pwg:Version>2.5</pwg:Version>
+          <pwg:State>Processing</pwg:State>
+          <scan:Jobs>
+            <scan:JobInfo>
+              <pwg:JobUri>/eSCL/ScanJobs/aaa-111</pwg:JobUri>
+              <pwg:JobUuid>aaa-111</pwg:JobUuid>
+              <pwg:JobState>Processing</pwg:JobState>
+              <pwg:JobStateReasons><pwg:JobStateReason>JobScanning</pwg:JobStateReason></pwg:JobStateReasons>
+            </scan:JobInfo>
+            <scan:JobInfo>
+              <pwg:JobUri>/eSCL/ScanJobs/bbb-222</pwg:JobUri>
+              <pwg:JobState>Completed</pwg:JobState>
+            </scan:JobInfo>
+          </scan:Jobs>
+        </scan:ScannerStatus>
+        """
+        let jobs = ScannerJobsXMLParser.parse(Data(xml.utf8))
+        XCTAssertEqual(jobs.count, 2)
+        XCTAssertEqual(jobs[0].jobID, "aaa-111")
+        XCTAssertTrue(jobs[0].isActive)
+        XCTAssertEqual(jobs[0].stateReasons, ["JobScanning"])
+        XCTAssertEqual(jobs[1].jobID, "bbb-222") // falls back to URI path when no UUID
+        XCTAssertFalse(jobs[1].isActive)
+    }
+
+    func testOwnedJobTrackingRecognizesRememberedJobs() {
+        let suiteName = "com.chromascan.test.\(UUID().uuidString)"
+        let store = UserDefaults(suiteName: suiteName)!
+        defer { store.removePersistentDomain(forName: suiteName) }
+        let client = ESCLClient(ownedJobsSuiteName: suiteName)
+
+        let id = "job-\(UUID().uuidString)"
+        client.rememberOwnedJob(URL(string: "http://localhost:1/eSCL/ScanJobs/\(id)")!)
+        XCTAssertTrue(client.isOwnedJob(ESCLJobInfo(uri: "/eSCL/ScanJobs/\(id)", uuid: nil, state: "Processing", stateReasons: [])))
+        XCTAssertFalse(client.isOwnedJob(ESCLJobInfo(uri: "/eSCL/ScanJobs/someone-else", uuid: nil, state: "Processing", stateReasons: [])))
+        XCTAssertNil(UserDefaults.standard.stringArray(forKey: "ESCLClient.recentOwnedScanJobIDs")?.first { $0 == id })
+    }
 }
