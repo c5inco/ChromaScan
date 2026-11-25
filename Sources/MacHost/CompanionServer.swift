@@ -411,15 +411,21 @@ final class CompanionServer {
                 }
             }
 
-        case .registerPushToken(let deviceToken, let environment, let enabled, let bundleID):
+        case .registerPushToken(let deviceToken, let environment, let enabled, let bundleID, let teamID, let registrationError):
             guard let authToken = session.authToken else { return }
+            let wasConfigured = preferences.isAPNsConfigured
             preferences.updatePushRegistration(
                 forAuthToken: authToken,
                 deviceToken: deviceToken,
                 environment: environment,
                 enabled: enabled,
-                bundleID: bundleID
+                bundleID: bundleID,
+                teamID: teamID,
+                registrationError: registrationError
             )
+            if preferences.isAPNsConfigured != wasConfigured {
+                broadcastHostMessage(.pushStatus(apnsConfigured: preferences.isAPNsConfigured))
+            }
             onStateChanged?()
 
         case .registerLiveActivityToken(let activityPushToken, let environment, let bundleID):
@@ -673,9 +679,7 @@ final class CompanionServer {
             switch result {
             case .delivered(let actualEnv):
                 deliveredCount += 1
-                if actualEnv != target.env {
-                    preferences.updateAPNsEnvironment(actualEnv, forDeviceToken: target.token)
-                }
+                preferences.updateAPNsEnvironment(actualEnv, forDeviceToken: target.token)
             case .unregistered:
                 preferences.clearAPNsToken(target.token)
                 if firstError == nil {
@@ -683,7 +687,7 @@ final class CompanionServer {
                 }
             case .failed(let statusCode, let reason):
                 if firstError == nil {
-                    firstError = statusCode > 0 ? "HTTP \(statusCode): \(reason)" : reason
+                    firstError = APNsDeliveryResult.friendlyErrorMessage(statusCode: statusCode, reason: reason)
                 }
             }
         }

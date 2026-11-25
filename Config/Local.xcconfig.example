@@ -1,0 +1,25 @@
+// Local signing overrides for ChromaScan (gitignored).
+// Copy this file to Config/Local.xcconfig or run: ./scripts/setup-signing.sh
+//
+// 1. Your 10-character Apple Developer Team ID (find in Xcode -> Settings -> Accounts
+//    or at https://developer.apple.com/account under Membership details).
+CHROMASCAN_TEAM_ID = YOUR_TEAM_ID
+
+// 2. A globally unique reverse-DNS prefix for your fork (e.g. com.yourname.chromascan).
+//    Targets become:
+//      <prefix>.app            (macOS app)
+//      <prefix>.remote         (iOS Companion app)
+//      <prefix>.remote.widgets (iOS Live Activity widget extension)
+//      <prefix>.tests          (macOS unit tests)
+//      <prefix>.remote.tests   (iOS unit tests)
+CHROMASCAN_BUNDLE_ID_PREFIX = com.example.chromascan
+
+// 3. Sign the macOS app with your Apple Development certificate so macOS Keychain
+//    and Local Network permissions persist across rebuilds.
+//    Leave as "-" if you prefer ad-hoc macOS signing without a certificate.
+CHROMASCAN_MAC_CODE_SIGN_IDENTITY = Apple Development
+
+// 4. Optional: Lock-screen APNs push notifications (requires a PAID Apple Developer Program membership).
+//    Leave blank for free Apple IDs ("Personal Teams") — iOS Companion still works with local notifications.
+//    Paid developers: uncomment the line below to enable the Push Notifications capability.
+// CHROMASCAN_IOS_ENTITLEMENTS = Resources/ChromaScanRemote.entitlements

@@ -444,7 +444,13 @@ struct RemoteControlsSheet: View {
             Text("iPhone Companion")
         } footer: {
             if store.notifyOnScanComplete {
-                if store.isDirectAPNsActive {
+                if let regError = store.apnsRegistrationError {
+                    if regError.localizedCaseInsensitiveContains("aps-environment") {
+                        Text("This build was signed without Push Notifications (free Apple ID or CHROMASCAN_IOS_ENTITLEMENTS disabled). Local alerts remain active.")
+                    } else {
+                        Text("Remote push unavailable (\(regError)). Local alerts remain active.")
+                    }
+                } else if store.isDirectAPNsActive {
                     Text("Direct push via Mac is active — alerts deliver even when your iPhone is locked.")
                 } else if store.hostAPNsConfigured {
                     Text("Mac APNs is configured; waiting for an iPhone push token (physical iPhone required). Local alerts remain active.")

@@ -130,6 +130,7 @@
 		D2771DBF41200CE845EE6B6F /* RemoteControlsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteControlsSheet.swift; sourceTree = "<group>"; };
 		D2C164A02E047BE51616C98A /* CompanionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionClient.swift; sourceTree = "<group>"; };
 		DCD4DEE9FB388A37E7113210 /* HostBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostBrowser.swift; sourceTree = "<group>"; };
+		DF22F86BE09CA3A55F4F197B /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
 		E4F61D67F19D186B07A71C62 /* CompanionIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionIntegrationTests.swift; sourceTree = "<group>"; };
 		F1849ED5E95E3BBD516425D8 /* CompanionServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionServer.swift; sourceTree = "<group>"; };
 		F32A6DB94B8F9C21129466DA /* ScanLiveActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanLiveActivityWidget.swift; sourceTree = "<group>"; };
@@ -222,6 +223,7 @@
 		9597397EF01EA2931E3E0468 = {
 			isa = PBXGroup;
 			children = (
+				D334EC7F82D2A47E319A76D4 /* Config */,
 				6441AE8D533E4D05E7AAD759 /* Resources */,
 				B3E9127794FD7B272778A0D7 /* Sources */,
 				B96A211189DB105E29AE5858 /* Tests */,
@@ -268,6 +270,14 @@
 				F32A6DB94B8F9C21129466DA /* ScanLiveActivityWidget.swift */,
 			);
 			path = Widgets;
+			sourceTree = "<group>";
+		};
+		D334EC7F82D2A47E319A76D4 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				DF22F86BE09CA3A55F4F197B /* Base.xcconfig */,
+			);
+			path = Config;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -375,21 +385,23 @@
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					32B6D1235E987AEC8B2BA3BB = {
+						DevelopmentTeam = "$(CHROMASCAN_TEAM_ID)";
 						ProvisioningStyle = Automatic;
 					};
 					41AD7D4CF3C600C8DF997F08 = {
+						DevelopmentTeam = "$(CHROMASCAN_TEAM_ID)";
 						ProvisioningStyle = Automatic;
 					};
 					69BFF811EE5E2B8C8CF3E48E = {
-						DevelopmentTeam = FXB7YX3ZD4;
+						DevelopmentTeam = "$(CHROMASCAN_TEAM_ID)";
 						ProvisioningStyle = Automatic;
 					};
 					D23DC539B647C55C109A1CBE = {
-						DevelopmentTeam = FXB7YX3ZD4;
+						DevelopmentTeam = "$(CHROMASCAN_TEAM_ID)";
 						ProvisioningStyle = Automatic;
 					};
 					DF2EC1C9112DA53CCD3880BC = {
-						DevelopmentTeam = FXB7YX3ZD4;
+						DevelopmentTeam = "$(CHROMASCAN_TEAM_ID)";
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -546,6 +558,7 @@
 /* Begin XCBuildConfiguration section */
 		113ADAC84A16DB6C2F46B21E /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = DF22F86BE09CA3A55F4F197B /* Base.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -614,9 +627,9 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Resources/ChromaScanRemote.entitlements;
-				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = FXB7YX3ZD4;
+				CODE_SIGN_ENTITLEMENTS = "$(CHROMASCAN_IOS_ENTITLEMENTS)";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				DEVELOPMENT_TEAM = "$(CHROMASCAN_TEAM_ID)";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Resources/iOSInfo.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -624,7 +637,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.chromascan.remote;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CHROMASCAN_BUNDLE_ID_PREFIX).remote";
 				PRODUCT_NAME = ChromaScanRemote;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
@@ -634,6 +647,7 @@
 		};
 		4419BA0CE7E886FDCE2CF14C /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = DF22F86BE09CA3A55F4F197B /* Base.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -694,7 +708,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				DEVELOPMENT_TEAM = FXB7YX3ZD4;
+				DEVELOPMENT_TEAM = "$(CHROMASCAN_TEAM_ID)";
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -702,7 +716,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.chromascan.ChromaScanRemoteTests;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CHROMASCAN_BUNDLE_ID_PREFIX).remote.tests";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ChromaScanRemote.app/ChromaScanRemote";
@@ -713,8 +727,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_IDENTITY = "$(CHROMASCAN_MAC_CODE_SIGN_IDENTITY)";
 				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = "$(CHROMASCAN_TEAM_ID)";
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -722,7 +737,7 @@
 					"@loader_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.chromascan.ChromaScanTests;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CHROMASCAN_BUNDLE_ID_PREFIX).tests";
 				SDKROOT = macosx;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ChromaScan.app/Contents/MacOS/ChromaScan";
 			};
@@ -731,7 +746,8 @@
 		69777C88D3954A1825E9573C /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				DEVELOPMENT_TEAM = FXB7YX3ZD4;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				DEVELOPMENT_TEAM = "$(CHROMASCAN_TEAM_ID)";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Resources/WidgetsInfo.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -740,7 +756,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.chromascan.remote.widgets;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CHROMASCAN_BUNDLE_ID_PREFIX).remote.widgets";
 				PRODUCT_NAME = ChromaScanWidgets;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -754,13 +770,14 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_IDENTITY = "$(CHROMASCAN_MAC_CODE_SIGN_IDENTITY)";
 				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = "$(CHROMASCAN_TEAM_ID)";
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.chromascan.app;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CHROMASCAN_BUNDLE_ID_PREFIX).app";
 				SDKROOT = macosx;
 			};
 			name = Debug;
@@ -769,8 +786,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_IDENTITY = "$(CHROMASCAN_MAC_CODE_SIGN_IDENTITY)";
 				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = "$(CHROMASCAN_TEAM_ID)";
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -778,7 +796,7 @@
 					"@loader_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.chromascan.ChromaScanTests;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CHROMASCAN_BUNDLE_ID_PREFIX).tests";
 				SDKROOT = macosx;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ChromaScan.app/Contents/MacOS/ChromaScan";
 			};
@@ -789,9 +807,9 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Resources/ChromaScanRemote.entitlements;
-				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = FXB7YX3ZD4;
+				CODE_SIGN_ENTITLEMENTS = "$(CHROMASCAN_IOS_ENTITLEMENTS)";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				DEVELOPMENT_TEAM = "$(CHROMASCAN_TEAM_ID)";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Resources/iOSInfo.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -799,7 +817,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.chromascan.remote;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CHROMASCAN_BUNDLE_ID_PREFIX).remote";
 				PRODUCT_NAME = ChromaScanRemote;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
@@ -812,13 +830,14 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_IDENTITY = "$(CHROMASCAN_MAC_CODE_SIGN_IDENTITY)";
 				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = "$(CHROMASCAN_TEAM_ID)";
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.chromascan.app;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CHROMASCAN_BUNDLE_ID_PREFIX).app";
 				SDKROOT = macosx;
 			};
 			name = Release;
@@ -827,7 +846,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				DEVELOPMENT_TEAM = FXB7YX3ZD4;
+				DEVELOPMENT_TEAM = "$(CHROMASCAN_TEAM_ID)";
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -835,7 +854,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.chromascan.ChromaScanRemoteTests;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CHROMASCAN_BUNDLE_ID_PREFIX).remote.tests";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ChromaScanRemote.app/ChromaScanRemote";
@@ -845,7 +864,8 @@
 		C3BA43F485C47398B74A349E /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				DEVELOPMENT_TEAM = FXB7YX3ZD4;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				DEVELOPMENT_TEAM = "$(CHROMASCAN_TEAM_ID)";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Resources/WidgetsInfo.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -854,7 +874,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.chromascan.remote.widgets;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CHROMASCAN_BUNDLE_ID_PREFIX).remote.widgets";
 				PRODUCT_NAME = ChromaScanWidgets;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;

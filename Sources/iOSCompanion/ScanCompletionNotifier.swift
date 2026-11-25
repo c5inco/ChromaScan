@@ -35,18 +35,24 @@ final class PushTokenRelay {
     static let shared = PushTokenRelay()
 
     private(set) var latestDeviceToken: String?
+    private(set) var lastRegistrationError: String?
     var onTokenUpdated: ((String) -> Void)?
+    var onRegistrationFailed: ((String) -> Void)?
 
     func didRegister(deviceTokenData: Data) {
         let hex = deviceTokenData.map { String(format: "%02x", $0) }.joined()
         guard !hex.isEmpty else { return }
         latestDeviceToken = hex
+        lastRegistrationError = nil
         notificationLog.notice("Registered APNs device token (\(hex.prefix(8), privacy: .public)…)")
         onTokenUpdated?(hex)
     }
 
     func didFailToRegister(error: Error) {
-        notificationLog.notice("Remote notifications registration unavailable: \(error.localizedDescription, privacy: .public)")
+        let message = error.localizedDescription
+        lastRegistrationError = message
+        notificationLog.notice("Remote notifications registration unavailable: \(message, privacy: .public)")
+        onRegistrationFailed?(message)
     }
 }
 

@@ -66,11 +66,15 @@ final class RemoteSessionStore {
     private(set) var liveActivityEnabled: Bool
     private(set) var notificationAuthorizationStatus: UNAuthorizationStatus = .notDetermined
     private(set) var apnsDeviceToken: String?
+    private(set) var apnsRegistrationError: String?
     private(set) var hostAPNsConfigured: Bool = false
     private(set) var isAppInBackground: Bool = false
 
     var isDirectAPNsActive: Bool {
-        notifyOnScanComplete && hostAPNsConfigured && (apnsDeviceToken?.isEmpty == false)
+        notifyOnScanComplete
+            && hostAPNsConfigured
+            && (apnsDeviceToken?.isEmpty == false)
+            && apnsRegistrationError == nil
     }
 
     var isLiveActivityActive: Bool {
@@ -172,8 +176,12 @@ final class RemoteSessionStore {
         wireClientCallbacks()
         if notifier == nil && !isRunningTests {
             self.apnsDeviceToken = PushTokenRelay.shared.latestDeviceToken
+            self.apnsRegistrationError = PushTokenRelay.shared.lastRegistrationError
             PushTokenRelay.shared.onTokenUpdated = { [weak self] token in
                 self?.updateAPNsDeviceToken(token)
+            }
+            PushTokenRelay.shared.onRegistrationFailed = { [weak self] errorMessage in
+                self?.updateAPNsRegistrationError(errorMessage)
             }
         }
         self.liveActivityManager.cleanupOrphanedActivities()
@@ -303,7 +311,25 @@ final class RemoteSessionStore {
         let clean = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
         apnsDeviceToken = clean
+        apnsRegistrationError = nil
         syncPushRegistrationWithHost()
+    }
+
+    func updateAPNsRegistrationError(_ message: String) {
+        let clean = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        apnsDeviceToken = nil
+        apnsRegistrationError = clean
+        syncPushRegistrationWithHost()
+    }
+
+    private var configuredTeamID: String? {
+        guard let raw = Bundle.main.object(forInfoDictionaryKey: "ChromaScanTeamID") as? String else {
+            return nil
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains("$(") else { return nil }
+        return trimmed
     }
 
     func refreshNotificationAuthorizationStatus() {
@@ -336,7 +362,9 @@ final class RemoteSessionStore {
             deviceToken: notifyOnScanComplete ? apnsDeviceToken : nil,
             environment: currentPushEnvironment,
             enabled: notifyOnScanComplete,
-            bundleID: Bundle.main.bundleIdentifier
+            bundleID: Bundle.main.bundleIdentifier,
+            teamID: configuredTeamID,
+            registrationError: notifyOnScanComplete ? apnsRegistrationError : nil
         ))
     }
 

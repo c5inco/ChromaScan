@@ -76,22 +76,40 @@ final class ActivityKitScanLiveActivityManager: ScanLiveActivityManaging {
         )
 
         do {
-            let activity = try Activity.request(
-                attributes: attributes,
-                content: content,
-                pushType: .token
-            )
+            let activity: Activity<ScanLiveActivityAttributes>
+            let usesPushToken: Bool
+            do {
+                activity = try Activity.request(
+                    attributes: attributes,
+                    content: content,
+                    pushType: .token
+                )
+                usesPushToken = true
+            } catch {
+                // Builds signed without Push Notifications (e.g. free Apple IDs) cannot request
+                // a Live Activity push token; fall back to local-only ActivityKit updates.
+                liveActivityLog.notice("Live Activity pushType .token unavailable (\(error.localizedDescription, privacy: .public)); starting local-only Live Activity")
+                activity = try Activity.request(
+                    attributes: attributes,
+                    content: content,
+                    pushType: nil
+                )
+                usesPushToken = false
+            }
+
             let activityID = activity.id
-            let initialTokenData = activity.pushToken
+            let initialTokenData = usesPushToken ? activity.pushToken : nil
             currentActivityID = activityID
             lastUpdateTime = CFAbsoluteTimeGetCurrent()
             lastPushedPhase = initialState.phase
-            liveActivityLog.notice("Started Live Activity \(activityID, privacy: .public) for \(resolutionDPI) DPI scan")
+            liveActivityLog.notice("Started Live Activity \(activityID, privacy: .public) for \(resolutionDPI) DPI scan (pushToken=\(usesPushToken, privacy: .public))")
 
             if let initialTokenData {
                 emitPushToken(initialTokenData)
             }
-            observePushTokens(activityID: activityID)
+            if usesPushToken {
+                observePushTokens(activityID: activityID)
+            }
         } catch {
             liveActivityLog.error("Failed to start Live Activity: \(error.localizedDescription, privacy: .public)")
         }
