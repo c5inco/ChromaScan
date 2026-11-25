@@ -24,14 +24,19 @@
 		4B1CCF09676DA81E2E2735C5 /* ESCLClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA537BB582A4E1675813DCA1 /* ESCLClient.swift */; };
 		4DE06D4A4DC15298827ADB24 /* BonjourScannerBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8A8CCE4993FB8C1DC395790 /* BonjourScannerBrowser.swift */; };
 		4F2FE15701683A8D22354D9E /* RemoteControlsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2771DBF41200CE845EE6B6F /* RemoteControlsSheet.swift */; };
+		5BA5C3D1811D977FCF8738E6 /* USBScannerBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1EB56E4838CF80BB8FEA2C1 /* USBScannerBrowser.swift */; };
 		60DE54F75DFB60592467EBA2 /* CompanionIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4F61D67F19D186B07A71C62 /* CompanionIntegrationTests.swift */; };
 		6531359E2300EA7F344530F6 /* ESCLXMLParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D7050506F4EE0F1C24D2F2B /* ESCLXMLParser.swift */; };
+		69F9486C5C4424C83D730800 /* USBScannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86063D855EE6E8D9E319BB33 /* USBScannerTests.swift */; };
 		6CEAD245E8AEBF410FA257C4 /* RemoteSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72593C77880160F6004A175D /* RemoteSessionStore.swift */; };
+		73A980FC9D4E494A0275D2B0 /* IOUSBHost.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EED24911E7C0F2A5447AA2D3 /* IOUSBHost.framework */; };
 		759EA8EB0F0C849249603614 /* ChromaTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62C4973A2E2078DB3ED2373D /* ChromaTheme.swift */; };
+		7826E3288FA57A93D6115D58 /* IPPUSBBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D292DC90326380B331DB351 /* IPPUSBBridge.swift */; };
 		7F118CECF60D4FC01007862E /* ScanLiveActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE74C265F1B0ACF8544672BA /* ScanLiveActivityManager.swift */; };
 		8B911ECF48746BC1258E8FAE /* ChromaScanRemoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73346CA0F792B6BB11013BEA /* ChromaScanRemoteApp.swift */; };
 		9788333B17855C7A80EF872E /* InspectorViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 002E96AAA2062918C85A0069 /* InspectorViewController.swift */; };
 		9E161131CA15C3932CC11C77 /* ChromaTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62C4973A2E2078DB3ED2373D /* ChromaTheme.swift */; };
+		A498888AEDF98A3718AFD097 /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C5058DC9AAD4298606FEAF62 /* IOKit.framework */; };
 		A5EC77868953C56AFE7FB4DB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13AAE8EB20CC1850E90EA965 /* Assets.xcassets */; };
 		AA2F6257A38EC92B2108D141 /* CompanionPopoverViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16E3F168FEE319DDE0BA2582 /* CompanionPopoverViewController.swift */; };
 		AA6565A91F0EE99D2B0EBAD2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13AAE8EB20CC1850E90EA965 /* Assets.xcassets */; };
@@ -97,6 +102,7 @@
 /* Begin PBXFileReference section */
 		002E96AAA2062918C85A0069 /* InspectorViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorViewController.swift; sourceTree = "<group>"; };
 		0CB280824279346BC069A3C6 /* RemoteWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteWorkspaceView.swift; sourceTree = "<group>"; };
+		0D292DC90326380B331DB351 /* IPPUSBBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPPUSBBridge.swift; sourceTree = "<group>"; };
 		0D98A6AA930BA3D0BA63AF64 /* StatusFooterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusFooterView.swift; sourceTree = "<group>"; };
 		13AAE8EB20CC1850E90EA965 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		144640D0594240C6D8FD1800 /* CompanionProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionProtocol.swift; sourceTree = "<group>"; };
@@ -119,18 +125,22 @@
 		7923524F2BBDBCC3B11F02E7 /* ScanSessionEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanSessionEngineTests.swift; sourceTree = "<group>"; };
 		7D1C6303D0EB2670D0032443 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		819787D98445E80E503763B2 /* ScanLiveActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanLiveActivityAttributes.swift; sourceTree = "<group>"; };
+		86063D855EE6E8D9E319BB33 /* USBScannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = USBScannerTests.swift; sourceTree = "<group>"; };
 		8891F199ADA7F2525ABAFB38 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		8F97DF66CF11872FEEF7CF8E /* ChromaScan.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ChromaScan.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		90315FD2FE8CF98F7F823F14 /* ChromaScanTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ChromaScanTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1EB56E4838CF80BB8FEA2C1 /* USBScannerBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = USBScannerBrowser.swift; sourceTree = "<group>"; };
 		AA1EB34041D3A58F462DEC8D /* ImagePipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImagePipeline.swift; sourceTree = "<group>"; };
 		ACA80DFF7134A8F9353D758D /* CompanionProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionProtocolTests.swift; sourceTree = "<group>"; };
 		AE74C265F1B0ACF8544672BA /* ScanLiveActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanLiveActivityManager.swift; sourceTree = "<group>"; };
 		B8621E21392A0CFD72994CC0 /* WidgetsAssets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = WidgetsAssets.xcassets; sourceTree = "<group>"; };
 		BD0542B5FF0A3B6D4F003D16 /* ChromaScanWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = ChromaScanWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		C5058DC9AAD4298606FEAF62 /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = System/Library/Frameworks/IOKit.framework; sourceTree = SDKROOT; };
 		D2771DBF41200CE845EE6B6F /* RemoteControlsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteControlsSheet.swift; sourceTree = "<group>"; };
 		D2C164A02E047BE51616C98A /* CompanionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionClient.swift; sourceTree = "<group>"; };
 		DCD4DEE9FB388A37E7113210 /* HostBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostBrowser.swift; sourceTree = "<group>"; };
 		E4F61D67F19D186B07A71C62 /* CompanionIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionIntegrationTests.swift; sourceTree = "<group>"; };
+		EED24911E7C0F2A5447AA2D3 /* IOUSBHost.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOUSBHost.framework; path = System/Library/Frameworks/IOUSBHost.framework; sourceTree = SDKROOT; };
 		F1849ED5E95E3BBD516425D8 /* CompanionServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionServer.swift; sourceTree = "<group>"; };
 		F32A6DB94B8F9C21129466DA /* ScanLiveActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanLiveActivityWidget.swift; sourceTree = "<group>"; };
 		F4A9DF072E7C165CCFC6E3DF /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
@@ -139,6 +149,18 @@
 		FA537BB582A4E1675813DCA1 /* ESCLClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ESCLClient.swift; sourceTree = "<group>"; };
 		FC908B070D72FD1B449890DF /* AppPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppPreferences.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		03F0132CA5D64DB52CC5D512 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A498888AEDF98A3718AFD097 /* IOKit.framework in Frameworks */,
+				73A980FC9D4E494A0275D2B0 /* IOUSBHost.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		06AB397FA7837600E45B08DC /* Core */ = {
@@ -151,6 +173,15 @@
 				819787D98445E80E503763B2 /* ScanLiveActivityAttributes.swift */,
 			);
 			path = Core;
+			sourceTree = "<group>";
+		};
+		0E5CD479C31658F7F68AC154 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				C5058DC9AAD4298606FEAF62 /* IOKit.framework */,
+				EED24911E7C0F2A5447AA2D3 /* IOUSBHost.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 		23EF23286CE7986F09E298FC /* iOSTests */ = {
@@ -173,11 +204,13 @@
 				FA537BB582A4E1675813DCA1 /* ESCLClient.swift */,
 				1D7050506F4EE0F1C24D2F2B /* ESCLXMLParser.swift */,
 				002E96AAA2062918C85A0069 /* InspectorViewController.swift */,
+				0D292DC90326380B331DB351 /* IPPUSBBridge.swift */,
 				8891F199ADA7F2525ABAFB38 /* main.swift */,
 				3A6C658899A253C7E75AA58D /* MainWindowController.swift */,
 				26DD1805F1D6F685488C90FD /* PreviewCanvasView.swift */,
 				1AE8EBCB485313B1634CEE7A /* ScanSessionEngine.swift */,
 				0D98A6AA930BA3D0BA63AF64 /* StatusFooterView.swift */,
+				A1EB56E4838CF80BB8FEA2C1 /* USBScannerBrowser.swift */,
 			);
 			path = MacHost;
 			sourceTree = "<group>";
@@ -215,6 +248,7 @@
 				E4F61D67F19D186B07A71C62 /* CompanionIntegrationTests.swift */,
 				ACA80DFF7134A8F9353D758D /* CompanionProtocolTests.swift */,
 				7923524F2BBDBCC3B11F02E7 /* ScanSessionEngineTests.swift */,
+				86063D855EE6E8D9E319BB33 /* USBScannerTests.swift */,
 			);
 			path = MacTests;
 			sourceTree = "<group>";
@@ -225,6 +259,7 @@
 				6441AE8D533E4D05E7AAD759 /* Resources */,
 				B3E9127794FD7B272778A0D7 /* Sources */,
 				B96A211189DB105E29AE5858 /* Tests */,
+				0E5CD479C31658F7F68AC154 /* Frameworks */,
 				ABB635C5AABA67B74E03E06D /* Products */,
 			);
 			sourceTree = "<group>";
@@ -297,6 +332,7 @@
 			buildPhases = (
 				B7362B7A7034CDDB2498B1C8 /* Sources */,
 				38FEB590D0A30EA1D44422EC /* Resources */,
+				03F0132CA5D64DB52CC5D512 /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -453,6 +489,7 @@
 				60DE54F75DFB60592467EBA2 /* CompanionIntegrationTests.swift in Sources */,
 				011F56D29AC65B386A49B6CC /* CompanionProtocolTests.swift in Sources */,
 				30F36BD3E7DB48827ABF656E /* ScanSessionEngineTests.swift in Sources */,
+				69F9486C5C4424C83D730800 /* USBScannerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -500,6 +537,7 @@
 				0648D61225A83EF93855A2AB /* CompanionServer.swift in Sources */,
 				4B1CCF09676DA81E2E2735C5 /* ESCLClient.swift in Sources */,
 				6531359E2300EA7F344530F6 /* ESCLXMLParser.swift in Sources */,
+				7826E3288FA57A93D6115D58 /* IPPUSBBridge.swift in Sources */,
 				41ACFD1D3674343DE4E16855 /* ImagePipeline.swift in Sources */,
 				9788333B17855C7A80EF872E /* InspectorViewController.swift in Sources */,
 				415E94AE39803C647D8E0775 /* MainWindowController.swift in Sources */,
@@ -508,6 +546,7 @@
 				BAED0E5767D17BBE641C96B5 /* ScanLiveActivityAttributes.swift in Sources */,
 				D8BBA79C42F2BAD9D7BF2575 /* ScanSessionEngine.swift in Sources */,
 				4628ADC11842974C3E8B7E7C /* StatusFooterView.swift in Sources */,
+				5BA5C3D1811D977FCF8738E6 /* USBScannerBrowser.swift in Sources */,
 				BC5F30AC44476441713F0933 /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

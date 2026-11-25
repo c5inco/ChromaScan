@@ -203,7 +203,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSMenuI
         case ToolbarID.refresh:
             let item = NSToolbarItem(itemIdentifier: itemIdentifier)
             item.label = "Refresh"
-            item.toolTip = "Refresh Wi-Fi scanners and status"
+            item.toolTip = "Refresh USB and Wi-Fi scanners and status"
             refreshButton.bezelStyle = .texturedRounded
             refreshButton.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Refresh")
             refreshButton.target = self
@@ -427,6 +427,13 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSMenuI
                 }
                 scannerPopup.addItem(withTitle: s.displayTitle + suffix)
                 scannerPopup.lastItem?.representedObject = s.id
+                let symbolName: String
+                switch s.transport {
+                case .usb: symbolName = "cable.connector"
+                case .wifi: symbolName = "wifi"
+                case .manual: symbolName = "network"
+                }
+                scannerPopup.lastItem?.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: s.transport.rawValue.uppercased())
             }
             if let selID = snapshot.selectedScannerID,
                let idx = snapshot.scanners.firstIndex(where: { $0.id == selID }) {
@@ -503,6 +510,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSMenuI
                 : (engine.rawPreviewBuffer != nil)
         case #selector(resetCrop):
             return !engine.isBusy && engine.viewMode == .preview && !engine.cropRect.isFull
+        case #selector(refreshScannersClicked):
+            return !engine.isBusy
         default:
             return true
         }
