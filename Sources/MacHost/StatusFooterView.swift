@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 
 /// Native bottom status bar displaying crop/zoom controls, dimensions, live progress, and cancel/reveal actions.
 @MainActor
@@ -26,7 +27,7 @@ final class StatusFooterView: NSView {
     // Status / progress
     private let statusLabel = NSTextField(labelWithString: "Ready")
     private let revealButton = NSButton(title: "Reveal", target: nil, action: nil)
-    private let progressIndicator = NSProgressIndicator()
+    private let progressBar = PigmentProgressBarView()
     private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
 
     override init(frame frameRect: NSRect) {
@@ -117,12 +118,8 @@ final class StatusFooterView: NSView {
         revealButton.action = #selector(revealClicked)
         revealButton.isHidden = true
 
-        progressIndicator.style = .bar
-        progressIndicator.controlSize = .small
-        progressIndicator.minValue = 0
-        progressIndicator.maxValue = 1
-        progressIndicator.isHidden = true
-        progressIndicator.translatesAutoresizingMaskIntoConstraints = false
+        progressBar.isHidden = true
+        progressBar.translatesAutoresizingMaskIntoConstraints = false
 
         cancelButton.bezelStyle = .rounded
         cancelButton.controlSize = .small
@@ -141,7 +138,7 @@ final class StatusFooterView: NSView {
         leftStack.alignment = .centerY
         leftStack.translatesAutoresizingMaskIntoConstraints = false
 
-        let rightStack = NSStackView(views: [statusLabel, revealButton, progressIndicator, cancelButton])
+        let rightStack = NSStackView(views: [statusLabel, revealButton, progressBar, cancelButton])
         rightStack.orientation = .horizontal
         rightStack.spacing = 8
         rightStack.alignment = .centerY
@@ -164,7 +161,8 @@ final class StatusFooterView: NSView {
             rightStack.centerYAnchor.constraint(equalTo: centerYAnchor),
             rightStack.leadingAnchor.constraint(greaterThanOrEqualTo: leftStack.trailingAnchor, constant: 12),
 
-            progressIndicator.widthAnchor.constraint(equalToConstant: 110)
+            progressBar.widthAnchor.constraint(equalToConstant: 116),
+            progressBar.heightAnchor.constraint(equalToConstant: 6)
         ])
 
         setZoomEnabled(false)
@@ -230,8 +228,8 @@ final class StatusFooterView: NSView {
     func setIdle(status: String, showReveal: Bool) {
         statusLabel.stringValue = status
         statusLabel.textColor = .secondaryLabelColor
-        progressIndicator.stopAnimation(nil)
-        progressIndicator.isHidden = true
+        progressBar.stop()
+        progressBar.isHidden = true
         cancelButton.isHidden = true
         revealButton.isHidden = !showReveal
     }
@@ -239,8 +237,8 @@ final class StatusFooterView: NSView {
     func setError(_ message: String) {
         statusLabel.stringValue = message
         statusLabel.textColor = .systemRed
-        progressIndicator.stopAnimation(nil)
-        progressIndicator.isHidden = true
+        progressBar.stop()
+        progressBar.isHidden = true
         cancelButton.isHidden = true
         revealButton.isHidden = true
     }
@@ -250,14 +248,8 @@ final class StatusFooterView: NSView {
         statusLabel.textColor = .labelColor
         revealButton.isHidden = true
         cancelButton.isHidden = false
-        progressIndicator.isHidden = false
-        if let fraction {
-            progressIndicator.isIndeterminate = false
-            progressIndicator.doubleValue = max(0, min(1, fraction))
-        } else {
-            progressIndicator.isIndeterminate = true
-            progressIndicator.startAnimation(nil)
-        }
+        progressBar.isHidden = false
+        progressBar.setFraction(fraction)
     }
 
     @objc private func trimEmptySpaceClicked() { onTrimEmptySpace?() }
@@ -268,4 +260,135 @@ final class StatusFooterView: NSView {
     @objc private func zoomInClicked() { onZoomIn?() }
     @objc private func zoomFitClicked() { onZoomFit?() }
     @objc private func zoomActualClicked() { onZoomActualSize?() }
+}
+
+// MARK: - Vermilion-to-Cyan Capsule Progress Bar (Matches iOS & Live Activity)
+
+@MainActor
+private final class PigmentProgressBarView: NSView {
+    private let trackLayer = CALayer()
+    private let fillLayer = CAGradientLayer()
+
+    private var currentFraction: Double?
+    private var isAnimatingIndeterminate = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setupLayers()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    private func setupLayers() {
+        wantsLayer = true
+        layer?.masksToBounds = false
+
+        trackLayer.masksToBounds = true
+        layer?.addSublayer(trackLayer)
+
+        fillLayer.startPoint = CGPoint(x: 0.0, y: 0.5)
+        fillLayer.endPoint = CGPoint(x: 1.0, y: 0.5)
+        trackLayer.addSublayer(fillLayer)
+
+        setAccessibilityElement(true)
+        setAccessibilityRole(.progressIndicator)
+        setAccessibilityLabel("Operation progress")
+        updateColors()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateColors()
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        trackLayer.frame = bounds
+        trackLayer.cornerRadius = bounds.height / 2.0
+        fillLayer.cornerRadius = bounds.height / 2.0
+        CATransaction.commit()
+        applyFillLayout(animated: false)
+    }
+
+    func setFraction(_ fraction: Double?) {
+        currentFraction = fraction.map { max(0.0, min(1.0, $0)) }
+        if let f = currentFraction {
+            setAccessibilityValue(Int((f * 100.0).rounded()))
+        } else {
+            setAccessibilityValue(nil)
+        }
+        applyFillLayout(animated: true)
+    }
+
+    func stop() {
+        currentFraction = nil
+        isAnimatingIndeterminate = false
+        fillLayer.removeAnimation(forKey: "indeterminateSweep")
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        fillLayer.frame = CGRect(x: 0, y: 0, width: 0, height: bounds.height)
+        CATransaction.commit()
+    }
+
+    private func updateColors() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            trackLayer.backgroundColor = NSColor.labelColor.withAlphaComponent(0.14).cgColor
+            let vermilion = ChromaTheme.vermilionNS.cgColor
+            let cyan = NSColor.systemCyan.cgColor
+            fillLayer.colors = [vermilion, cyan]
+        }
+    }
+
+    private func applyFillLayout(animated: Bool) {
+        let width = bounds.width
+        let height = bounds.height
+        guard width > 0, height > 0 else { return }
+
+        if let fraction = currentFraction {
+            if isAnimatingIndeterminate {
+                isAnimatingIndeterminate = false
+                fillLayer.removeAnimation(forKey: "indeterminateSweep")
+            }
+            let targetWidth = fraction > 0 ? max(height, width * CGFloat(fraction)) : 0
+            CATransaction.begin()
+            CATransaction.setDisableActions(!animated)
+            CATransaction.setAnimationDuration(0.18)
+            CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+            fillLayer.opacity = 1.0
+            fillLayer.frame = CGRect(x: 0, y: 0, width: targetWidth, height: height)
+            CATransaction.commit()
+        } else if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            isAnimatingIndeterminate = false
+            fillLayer.removeAnimation(forKey: "indeterminateSweep")
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            fillLayer.opacity = 0.72
+            fillLayer.frame = CGRect(x: 0, y: 0, width: width, height: height)
+            CATransaction.commit()
+        } else {
+            let segWidth = max(32, width * 0.34)
+            let travel = max(0, width - segWidth)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            fillLayer.opacity = 1.0
+            fillLayer.frame = CGRect(x: 0, y: 0, width: segWidth, height: height)
+            CATransaction.commit()
+
+            if !isAnimatingIndeterminate || fillLayer.animation(forKey: "indeterminateSweep") == nil {
+                isAnimatingIndeterminate = true
+                let anim = CABasicAnimation(keyPath: "position.x")
+                anim.fromValue = segWidth / 2.0
+                anim.toValue = travel + segWidth / 2.0
+                anim.duration = 1.1
+                anim.autoreverses = true
+                anim.repeatCount = .infinity
+                anim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                fillLayer.add(anim, forKey: "indeterminateSweep")
+            }
+        }
+    }
 }

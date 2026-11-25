@@ -175,6 +175,7 @@ struct RemoteControlsSheet: View {
                 get: { snap.settings.autoTrimEmptySpace },
                 set: { store.updateSettings(ScanSettingsPatch(autoTrimEmptySpace: $0)) }
             ))
+            .tint(ChromaTheme.vermilion)
             .disabled(snap.isBusy)
         }
     }
@@ -198,6 +199,7 @@ struct RemoteControlsSheet: View {
                         ),
                         in: Double(br.min)...Double(br.max)
                     )
+                    .tint(ChromaTheme.vermilion)
                     .disabled(snap.isBusy)
                 }
             }
@@ -217,6 +219,7 @@ struct RemoteControlsSheet: View {
                         ),
                         in: Double(cr.min)...Double(cr.max)
                     )
+                    .tint(ChromaTheme.vermilion)
                     .disabled(snap.isBusy)
                 }
             }
@@ -267,12 +270,14 @@ struct RemoteControlsSheet: View {
                         ),
                         in: 0.5...1.0
                     )
+                    .tint(ChromaTheme.vermilion)
                 }
 
                 Toggle("Preview compression live", isOn: Binding(
                     get: { snap.settings.previewCompressionEnabled },
                     set: { store.updateSettings(ScanSettingsPatch(previewCompressionEnabled: $0)) }
                 ))
+                .tint(ChromaTheme.vermilion)
             }
 
             LabeledContent("Mac Folder", value: snap.saveFolderDisplayName)
@@ -293,6 +298,7 @@ struct RemoteControlsSheet: View {
                 get: { snap.settings.autoIncrement },
                 set: { store.updateSettings(ScanSettingsPatch(autoIncrement: $0)) }
             ))
+            .tint(ChromaTheme.vermilion)
 
             if !snap.outputPreviewSummary.isEmpty {
                 Text(snap.outputPreviewSummary)
@@ -324,6 +330,7 @@ struct RemoteControlsSheet: View {
                     ),
                     in: 0.0...0.25
                 )
+                .tint(ChromaTheme.vermilion)
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -345,6 +352,7 @@ struct RemoteControlsSheet: View {
                     ),
                     in: 0.75...1.0
                 )
+                .tint(ChromaTheme.vermilion)
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -366,6 +374,7 @@ struct RemoteControlsSheet: View {
                     ),
                     in: 0.5...2.0
                 )
+                .tint(ChromaTheme.vermilion)
             }
 
             Button("Reset Tone Adjustments") {
@@ -384,6 +393,7 @@ struct RemoteControlsSheet: View {
             )) {
                 Label("Notify When Scan Completes", systemImage: "bell.badge")
             }
+            .tint(ChromaTheme.vermilion)
 
             Toggle(isOn: Binding(
                 get: { store.liveActivityEnabled },
@@ -391,6 +401,7 @@ struct RemoteControlsSheet: View {
             )) {
                 Label("Live Activity & Dynamic Island", systemImage: "platter.filled.top.iphone")
             }
+            .tint(ChromaTheme.vermilion)
 
             if store.liveActivityEnabled && !store.areLiveActivitiesAvailable {
                 Text("Live Activities are turned off in iOS Settings for ChromaScan.")
@@ -457,6 +468,7 @@ struct RemoteControlsSheet: View {
                     TextField("Port", text: $manualScannerPort)
                         .keyboardType(.numberPad)
                     Toggle("Use HTTPS (port 443)", isOn: $manualScannerTLS)
+                        .tint(ChromaTheme.vermilion)
                 }
             }
             .navigationTitle("Manual Scanner")

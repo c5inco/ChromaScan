@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             return
         }
+        NSApp.appearance = NSAppearance(named: .darkAqua)
         if let appIcon = NSImage(named: "AppIcon") {
             NSApp.applicationIconImage = appIcon
         }

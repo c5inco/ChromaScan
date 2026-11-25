@@ -244,9 +244,15 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSMenuI
             item.label = "Scan"
             item.toolTip = "Scan and save at full resolution (⌘⏎)"
             scanButton.bezelStyle = .rounded
-            scanButton.bezelColor = .controlAccentColor
-            scanButton.contentTintColor = .white
-            scanButton.title = "Scan"
+            scanButton.bezelColor = ChromaTheme.creamNS
+            scanButton.contentTintColor = ChromaTheme.inkNS
+            scanButton.attributedTitle = NSAttributedString(
+                string: "Scan",
+                attributes: [
+                    .foregroundColor: ChromaTheme.inkNS,
+                    .font: NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+                ]
+            )
             scanButton.image = NSImage(systemSymbolName: "scanner", accessibilityDescription: "Scan")
             scanButton.imagePosition = .imageLeading
             scanButton.target = self

@@ -36,6 +36,8 @@ struct ChromaScanRemoteApp: App {
                     PairingView(store: store)
                 }
             }
+            .preferredColorScheme(.dark)
+            .tint(ChromaTheme.cream)
             .onChange(of: scenePhase) { _, newPhase in
                 switch newPhase {
                 case .active:

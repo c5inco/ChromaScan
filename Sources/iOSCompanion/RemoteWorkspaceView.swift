@@ -293,12 +293,14 @@ struct RemoteWorkspaceView: View {
                 } label: {
                     Label("Scan", systemImage: "scanner")
                         .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(ready ? ChromaTheme.ink : .secondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 4)
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(ChromaTheme.cream)
                 .controlSize(.regular)
                 .disabled(!ready)
 
@@ -405,6 +407,17 @@ private struct ScanningProgressBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isSweeping = false
 
+    private var pigmentGradient: LinearGradient {
+        LinearGradient(
+            colors: [
+                ChromaTheme.vermilion,
+                Color.cyan
+            ],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+
     var body: some View {
         GeometryReader { geo in
             let width = max(0, geo.size.width)
@@ -415,18 +428,18 @@ private struct ScanningProgressBar: View {
                 if let fraction {
                     let clamped = max(0, min(1, fraction))
                     Capsule()
-                        .fill(Color.accentColor)
+                        .fill(pigmentGradient)
                         .frame(width: clamped > 0 ? max(6, width * clamped) : 0)
                         .animation(.easeOut(duration: 0.2), value: clamped)
                 } else if reduceMotion {
                     Capsule()
-                        .fill(Color.accentColor.opacity(0.65))
+                        .fill(pigmentGradient.opacity(0.70))
                         .frame(width: width)
                 } else {
                     let segmentWidth = max(48, width * 0.32)
                     let travel = max(0, width - segmentWidth)
                     Capsule()
-                        .fill(Color.accentColor)
+                        .fill(pigmentGradient)
                         .frame(width: segmentWidth)
                         .offset(x: isSweeping ? travel : 0)
                         .task {

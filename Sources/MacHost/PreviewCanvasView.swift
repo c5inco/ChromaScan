@@ -408,7 +408,7 @@ final class PreviewCanvasView: NSView {
         if case .create = dragMode { drawThirdsGrid(in: selRect, context: ctx) }
 
         ctx.saveGState()
-        ctx.setStrokeColor(NSColor.controlAccentColor.cgColor)
+        ctx.setStrokeColor(ChromaTheme.creamNS.cgColor)
         ctx.setLineWidth(1.5)
         ctx.stroke(selRect.insetBy(dx: 0.75, dy: 0.75))
 
@@ -422,7 +422,7 @@ final class PreviewCanvasView: NSView {
             )
             ctx.setFillColor(NSColor.white.cgColor)
             ctx.fillEllipse(in: dotRect)
-            ctx.setStrokeColor(NSColor.controlAccentColor.cgColor)
+            ctx.setStrokeColor(ChromaTheme.creamNS.cgColor)
             ctx.setLineWidth(1.75)
             ctx.strokeEllipse(in: dotRect)
         }

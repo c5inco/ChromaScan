@@ -103,16 +103,20 @@ struct PairingView: View {
                             .keyboardType(.URL)
                         TextField("Port (from Mac Companion popover)", text: $manualPort)
                             .keyboardType(.numberPad)
+                        let canConnectManual = !manualHost.trimmingCharacters(in: .whitespaces).isEmpty
+                            && UInt16(manualPort.trimmingCharacters(in: .whitespaces)) != nil
                         Button {
                             guard let p = UInt16(manualPort.trimmingCharacters(in: .whitespaces)) else { return }
                             pinInput = ""
                             store.connectManual(host: manualHost, port: p)
                         } label: {
                             Label("Connect to Host", systemImage: "network")
+                                .foregroundStyle(canConnectManual ? ChromaTheme.ink : .secondary)
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(manualHost.trimmingCharacters(in: .whitespaces).isEmpty || UInt16(manualPort.trimmingCharacters(in: .whitespaces)) == nil)
+                        .tint(ChromaTheme.cream)
+                        .disabled(!canConnectManual)
                     }
                 }
             }
@@ -173,11 +177,17 @@ struct PairingView: View {
                             }
                         }
 
-                    Button("Pair") {
+                    let canSubmitPIN = pinInput.filter(\.isNumber).count == 6
+                    Button {
                         store.submitPIN(pinInput)
+                    } label: {
+                        Text("Pair")
+                            .fontWeight(.semibold)
+                            .foregroundStyle(canSubmitPIN ? ChromaTheme.ink : .secondary)
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(pinInput.filter(\.isNumber).count != 6)
+                    .tint(ChromaTheme.cream)
+                    .disabled(!canSubmitPIN)
                 }
 
                 Button("Cancel Pairing", role: .cancel) {
