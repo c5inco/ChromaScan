@@ -44,7 +44,7 @@ struct RemoteControlsSheet: View {
     private func scannerSection(_ snap: SessionSnapshot) -> some View {
         Section("Scanner") {
             if snap.scanners.isEmpty {
-                Text("No Wi-Fi scanners found on Mac")
+                Text("No scanners found on Mac")
                     .foregroundStyle(.secondary)
             } else {
                 Picker("Scanner", selection: Binding(
@@ -52,7 +52,11 @@ struct RemoteControlsSheet: View {
                     set: { store.selectScanner(id: $0) }
                 )) {
                     ForEach(snap.scanners) { scanner in
-                        Text(scanner.displayTitle).tag(scanner.id)
+                        Label(
+                            scanner.displayTitle,
+                            systemImage: scanner.transport == .usb ? "cable.connector" : (scanner.transport == .manual ? "network" : "wifi")
+                        )
+                        .tag(scanner.id)
                     }
                 }
                 .disabled(snap.isBusy)
