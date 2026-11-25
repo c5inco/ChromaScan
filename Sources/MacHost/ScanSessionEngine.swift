@@ -72,7 +72,16 @@ final class ScanSessionEngine {
     private(set) var renderedDisplayTrueSize: CGSize = .zero
     private(set) var renderedDisplayDPI: Int = 100
     private(set) var renderedFullScanImage: CGImage?
-    private(set) var activeImageGeneration: UInt32 = 0
+    /// Seeded from the clock (tenths of a second since 2025-01-01) instead of 0 so generations keep
+    /// increasing across app relaunches. Companion clients drop proxy frames older than the newest
+    /// generation they've seen; a counter restarting at 0 made a still-connected iPhone discard every
+    /// new preview after the Mac app restarted.
+    private(set) var activeImageGeneration: UInt32 = ScanSessionEngine.launchImageGenerationSeed()
+
+    nonisolated static func launchImageGenerationSeed(now: Date = Date()) -> UInt32 {
+        let tenths = (now.timeIntervalSince1970 - 1_735_689_600) * 10 // 2025-01-01T00:00:00Z
+        return UInt32(clamping: max(0, Int64(tenths)))
+    }
 
     private var defaultHardwareBrightness: Int = 1000
     private var defaultHardwareContrast: Int = 1000

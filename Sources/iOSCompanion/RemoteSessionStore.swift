@@ -780,6 +780,10 @@ final class RemoteSessionStore {
         case .welcome(_, let hostID, let hostName, let authToken, let snap):
             client.saveAuthToken(authToken, hostID: hostID)
             phase = .connected(hostID: hostID, hostName: hostName)
+            // Every (re)connect starts a fresh image stream: the host pushes its current proxy right
+            // after welcome, and a relaunched host restarts its generation counter, so stale
+            // `latestProxyGeneration` from a previous host process would drop every new frame.
+            resetSessionImages()
             applyIncomingSnapshot(snap)
             syncPushRegistrationWithHost()
             if liveActivityManager.hasActiveActivity && isScanActive {

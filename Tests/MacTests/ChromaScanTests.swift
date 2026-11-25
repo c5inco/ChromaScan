@@ -381,4 +381,13 @@ final class ChromaScanTests: XCTestCase {
         XCTAssertFalse(client.isOwnedJob(ESCLJobInfo(uri: "/eSCL/ScanJobs/someone-else", uuid: nil, state: "Processing", stateReasons: [])))
         XCTAssertNil(UserDefaults.standard.stringArray(forKey: "ESCLClient.recentOwnedScanJobIDs")?.first { $0 == id })
     }
+
+    func testImageGenerationSeedIncreasesAcrossLaunches() {
+        let first = Date(timeIntervalSince1970: 1_764_000_000)
+        let a = ScanSessionEngine.launchImageGenerationSeed(now: first)
+        let b = ScanSessionEngine.launchImageGenerationSeed(now: first.addingTimeInterval(1))
+        XCTAssertGreaterThan(a, 0)
+        XCTAssertEqual(b - a, 10) // tenths of a second
+        XCTAssertEqual(ScanSessionEngine.launchImageGenerationSeed(now: Date(timeIntervalSince1970: 0)), 0)
+    }
 }
