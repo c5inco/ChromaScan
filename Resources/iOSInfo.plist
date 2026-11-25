@@ -35,6 +35,8 @@
 	<string>ChromaScan Companion discovers and connects to your Mac running ChromaScan on your local network.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>ChromaScan Companion saves Display P3 copies of scans to your Photos library when requested.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UIRequiresFullScreen</key>

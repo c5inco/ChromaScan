@@ -11,6 +11,7 @@
 		0154233DA50988DB0968F645 /* AppPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC908B070D72FD1B449890DF /* AppPreferences.swift */; };
 		0648D61225A83EF93855A2AB /* CompanionServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1849ED5E95E3BBD516425D8 /* CompanionServer.swift */; };
 		11FD81D50B61DC27E7D4213F /* ChromaScanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28B7DDC16C1A43320CD832EA /* ChromaScanTests.swift */; };
+		1D883079C562503A19D06B64 /* ScanLiveActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 819787D98445E80E503763B2 /* ScanLiveActivityAttributes.swift */; };
 		29A07F96D77C65D903F68939 /* RemoteCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D561A0EB2551C5F08C66BB1 /* RemoteCanvasView.swift */; };
 		2AFECF505E34937F5183E306 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D1C6303D0EB2670D0032443 /* Models.swift */; };
 		30F36BD3E7DB48827ABF656E /* ScanSessionEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7923524F2BBDBCC3B11F02E7 /* ScanSessionEngineTests.swift */; };
@@ -24,28 +25,41 @@
 		60DE54F75DFB60592467EBA2 /* CompanionIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4F61D67F19D186B07A71C62 /* CompanionIntegrationTests.swift */; };
 		6531359E2300EA7F344530F6 /* ESCLXMLParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D7050506F4EE0F1C24D2F2B /* ESCLXMLParser.swift */; };
 		6CEAD245E8AEBF410FA257C4 /* RemoteSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72593C77880160F6004A175D /* RemoteSessionStore.swift */; };
+		7F118CECF60D4FC01007862E /* ScanLiveActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE74C265F1B0ACF8544672BA /* ScanLiveActivityManager.swift */; };
 		8B911ECF48746BC1258E8FAE /* ChromaScanRemoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73346CA0F792B6BB11013BEA /* ChromaScanRemoteApp.swift */; };
 		9788333B17855C7A80EF872E /* InspectorViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 002E96AAA2062918C85A0069 /* InspectorViewController.swift */; };
 		A5EC77868953C56AFE7FB4DB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13AAE8EB20CC1850E90EA965 /* Assets.xcassets */; };
 		AA2F6257A38EC92B2108D141 /* CompanionPopoverViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16E3F168FEE319DDE0BA2582 /* CompanionPopoverViewController.swift */; };
 		AA6565A91F0EE99D2B0EBAD2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13AAE8EB20CC1850E90EA965 /* Assets.xcassets */; };
 		AAC3792122EC81DBD3F873DA /* CompanionProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 144640D0594240C6D8FD1800 /* CompanionProtocol.swift */; };
+		AE2269F5B8BE9A74D4082068 /* ScanLiveActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = F32A6DB94B8F9C21129466DA /* ScanLiveActivityWidget.swift */; };
 		AEC065521EBB177332590A42 /* HostBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCD4DEE9FB388A37E7113210 /* HostBrowser.swift */; };
 		B24CDE02159825DD12076450 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AA3D80B00290F84EDA6A08C /* AppDelegate.swift */; };
 		B4EE293F9286CE9D44B5C202 /* CompanionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2C164A02E047BE51616C98A /* CompanionClient.swift */; };
 		B546D55F3440DDD4FD633D0A /* CompanionProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 144640D0594240C6D8FD1800 /* CompanionProtocol.swift */; };
+		BAED0E5767D17BBE641C96B5 /* ScanLiveActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 819787D98445E80E503763B2 /* ScanLiveActivityAttributes.swift */; };
 		BC5F30AC44476441713F0933 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8891F199ADA7F2525ABAFB38 /* main.swift */; };
 		BCDF19CF357265EED9005DB7 /* ScanCompletionNotifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FFE16C5054ED0DA0BB95511 /* ScanCompletionNotifier.swift */; };
+		C41F14F45FA4CBAFB8421235 /* ScanLiveActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 819787D98445E80E503763B2 /* ScanLiveActivityAttributes.swift */; };
 		C4B6CF12C214E7C49E78EB3D /* ChromaScanRemoteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 402CE49A4AC2D4FC925AEB05 /* ChromaScanRemoteTests.swift */; };
 		C8F4B4DFA910D0CDB4460263 /* APNsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19524E18267A0F7C89DCE128 /* APNsClient.swift */; };
+		C9FA8F13E0AF5ED71CCEBE83 /* ChromaScanWidgetsBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA1EC1B96864BCFCB4104734 /* ChromaScanWidgetsBundle.swift */; };
 		D8BBA79C42F2BAD9D7BF2575 /* ScanSessionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AE8EBCB485313B1634CEE7A /* ScanSessionEngine.swift */; };
 		DC8D96F6F15D22163A06F084 /* RemoteWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CB280824279346BC069A3C6 /* RemoteWorkspaceView.swift */; };
 		E88BD7567A02468FB5C28DB6 /* ImagePipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1EB34041D3A58F462DEC8D /* ImagePipeline.swift */; };
 		EC0893452D92CFE990F24B8B /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D1C6303D0EB2670D0032443 /* Models.swift */; };
+		F0C91F1D516EC18DD70A8968 /* ChromaScanWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = BD0542B5FF0A3B6D4F003D16 /* ChromaScanWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		F2670C9B7D2BF2D1EC25B272 /* PreviewCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26DD1805F1D6F685488C90FD /* PreviewCanvasView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		3D4743EDFB114BACB07F2BF3 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 0FADBB0E82FC89979962D7EE /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D23DC539B647C55C109A1CBE;
+			remoteInfo = ChromaScanWidgets;
+		};
 		9ECB16202D27DB8DBF357793 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 0FADBB0E82FC89979962D7EE /* Project object */;
@@ -61,6 +75,20 @@
 			remoteInfo = ChromaScan;
 		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		34DAEA7BAFE0BC489C5D0F17 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				F0C91F1D516EC18DD70A8968 /* ChromaScanWidgets.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		002E96AAA2062918C85A0069 /* InspectorViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorViewController.swift; sourceTree = "<group>"; };
@@ -85,18 +113,23 @@
 		73346CA0F792B6BB11013BEA /* ChromaScanRemoteApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromaScanRemoteApp.swift; sourceTree = "<group>"; };
 		7923524F2BBDBCC3B11F02E7 /* ScanSessionEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanSessionEngineTests.swift; sourceTree = "<group>"; };
 		7D1C6303D0EB2670D0032443 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		819787D98445E80E503763B2 /* ScanLiveActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanLiveActivityAttributes.swift; sourceTree = "<group>"; };
 		8891F199ADA7F2525ABAFB38 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		8F97DF66CF11872FEEF7CF8E /* ChromaScan.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ChromaScan.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		90315FD2FE8CF98F7F823F14 /* ChromaScanTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ChromaScanTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA1EB34041D3A58F462DEC8D /* ImagePipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImagePipeline.swift; sourceTree = "<group>"; };
 		ACA80DFF7134A8F9353D758D /* CompanionProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionProtocolTests.swift; sourceTree = "<group>"; };
+		AE74C265F1B0ACF8544672BA /* ScanLiveActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanLiveActivityManager.swift; sourceTree = "<group>"; };
+		BD0542B5FF0A3B6D4F003D16 /* ChromaScanWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = ChromaScanWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		D2771DBF41200CE845EE6B6F /* RemoteControlsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteControlsSheet.swift; sourceTree = "<group>"; };
 		D2C164A02E047BE51616C98A /* CompanionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionClient.swift; sourceTree = "<group>"; };
 		DCD4DEE9FB388A37E7113210 /* HostBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostBrowser.swift; sourceTree = "<group>"; };
 		E4F61D67F19D186B07A71C62 /* CompanionIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionIntegrationTests.swift; sourceTree = "<group>"; };
 		F1849ED5E95E3BBD516425D8 /* CompanionServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionServer.swift; sourceTree = "<group>"; };
+		F32A6DB94B8F9C21129466DA /* ScanLiveActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanLiveActivityWidget.swift; sourceTree = "<group>"; };
 		F4A9DF072E7C165CCFC6E3DF /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
 		F8A8CCE4993FB8C1DC395790 /* BonjourScannerBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BonjourScannerBrowser.swift; sourceTree = "<group>"; };
+		FA1EC1B96864BCFCB4104734 /* ChromaScanWidgetsBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromaScanWidgetsBundle.swift; sourceTree = "<group>"; };
 		FA537BB582A4E1675813DCA1 /* ESCLClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ESCLClient.swift; sourceTree = "<group>"; };
 		FC908B070D72FD1B449890DF /* AppPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppPreferences.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -108,6 +141,7 @@
 				144640D0594240C6D8FD1800 /* CompanionProtocol.swift */,
 				AA1EB34041D3A58F462DEC8D /* ImagePipeline.swift */,
 				7D1C6303D0EB2670D0032443 /* Models.swift */,
+				819787D98445E80E503763B2 /* ScanLiveActivityAttributes.swift */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -153,6 +187,7 @@
 				72593C77880160F6004A175D /* RemoteSessionStore.swift */,
 				0CB280824279346BC069A3C6 /* RemoteWorkspaceView.swift */,
 				1FFE16C5054ED0DA0BB95511 /* ScanCompletionNotifier.swift */,
+				AE74C265F1B0ACF8544672BA /* ScanLiveActivityManager.swift */,
 			);
 			path = iOSCompanion;
 			sourceTree = "<group>";
@@ -193,6 +228,7 @@
 				6BD54F5AA3038E12A62DBAC5 /* ChromaScanRemote.app */,
 				47B4A2AA2D7C02B03B7C4881 /* ChromaScanRemoteTests.xctest */,
 				90315FD2FE8CF98F7F823F14 /* ChromaScanTests.xctest */,
+				BD0542B5FF0A3B6D4F003D16 /* ChromaScanWidgets.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -203,6 +239,7 @@
 				06AB397FA7837600E45B08DC /* Core */,
 				44DF574E2DEAC9F4E38FC55A /* iOSCompanion */,
 				425E3A462956A056C7A87F00 /* MacHost */,
+				CC8B336846FE90FA60759A50 /* Widgets */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -214,6 +251,15 @@
 				89EDEC13EA32EFB3D2ACE0BE /* MacTests */,
 			);
 			path = Tests;
+			sourceTree = "<group>";
+		};
+		CC8B336846FE90FA60759A50 /* Widgets */ = {
+			isa = PBXGroup;
+			children = (
+				FA1EC1B96864BCFCB4104734 /* ChromaScanWidgetsBundle.swift */,
+				F32A6DB94B8F9C21129466DA /* ScanLiveActivityWidget.swift */,
+			);
+			path = Widgets;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -273,16 +319,35 @@
 			productReference = 47B4A2AA2D7C02B03B7C4881 /* ChromaScanRemoteTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		D23DC539B647C55C109A1CBE /* ChromaScanWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 9ECEA0A40A7AB7953954DFA9 /* Build configuration list for PBXNativeTarget "ChromaScanWidgets" */;
+			buildPhases = (
+				BD39A41F3F83B2731AB6F5E5 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ChromaScanWidgets;
+			packageProductDependencies = (
+			);
+			productName = ChromaScanWidgets;
+			productReference = BD0542B5FF0A3B6D4F003D16 /* ChromaScanWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		DF2EC1C9112DA53CCD3880BC /* ChromaScanRemote */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 63F8036F79B63BBB351504B5 /* Build configuration list for PBXNativeTarget "ChromaScanRemote" */;
 			buildPhases = (
 				7C01CCD4134938B17B827BC6 /* Sources */,
 				B8941227BD5478DBD1A59468 /* Resources */,
+				34DAEA7BAFE0BC489C5D0F17 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				FB74665578F77910E057D23C /* PBXTargetDependency */,
 			);
 			name = ChromaScanRemote;
 			packageProductDependencies = (
@@ -310,6 +375,10 @@
 						DevelopmentTeam = FXB7YX3ZD4;
 						ProvisioningStyle = Automatic;
 					};
+					D23DC539B647C55C109A1CBE = {
+						DevelopmentTeam = FXB7YX3ZD4;
+						ProvisioningStyle = Automatic;
+					};
 					DF2EC1C9112DA53CCD3880BC = {
 						DevelopmentTeam = FXB7YX3ZD4;
 						ProvisioningStyle = Automatic;
@@ -332,6 +401,7 @@
 			targets = (
 				41AD7D4CF3C600C8DF997F08 /* ChromaScan */,
 				DF2EC1C9112DA53CCD3880BC /* ChromaScanRemote */,
+				D23DC539B647C55C109A1CBE /* ChromaScanWidgets */,
 				32B6D1235E987AEC8B2BA3BB /* ChromaScanTests */,
 				69BFF811EE5E2B8C8CF3E48E /* ChromaScanRemoteTests */,
 			);
@@ -393,6 +463,8 @@
 				6CEAD245E8AEBF410FA257C4 /* RemoteSessionStore.swift in Sources */,
 				DC8D96F6F15D22163A06F084 /* RemoteWorkspaceView.swift in Sources */,
 				BCDF19CF357265EED9005DB7 /* ScanCompletionNotifier.swift in Sources */,
+				C41F14F45FA4CBAFB8421235 /* ScanLiveActivityAttributes.swift in Sources */,
+				7F118CECF60D4FC01007862E /* ScanLiveActivityManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -414,9 +486,20 @@
 				415E94AE39803C647D8E0775 /* MainWindowController.swift in Sources */,
 				2AFECF505E34937F5183E306 /* Models.swift in Sources */,
 				F2670C9B7D2BF2D1EC25B272 /* PreviewCanvasView.swift in Sources */,
+				BAED0E5767D17BBE641C96B5 /* ScanLiveActivityAttributes.swift in Sources */,
 				D8BBA79C42F2BAD9D7BF2575 /* ScanSessionEngine.swift in Sources */,
 				4628ADC11842974C3E8B7E7C /* StatusFooterView.swift in Sources */,
 				BC5F30AC44476441713F0933 /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BD39A41F3F83B2731AB6F5E5 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C9FA8F13E0AF5ED71CCEBE83 /* ChromaScanWidgetsBundle.swift in Sources */,
+				1D883079C562503A19D06B64 /* ScanLiveActivityAttributes.swift in Sources */,
+				AE2269F5B8BE9A74D4082068 /* ScanLiveActivityWidget.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -432,6 +515,11 @@
 			isa = PBXTargetDependency;
 			target = DF2EC1C9112DA53CCD3880BC /* ChromaScanRemote */;
 			targetProxy = 9ECB16202D27DB8DBF357793 /* PBXContainerItemProxy */;
+		};
+		FB74665578F77910E057D23C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = D23DC539B647C55C109A1CBE /* ChromaScanWidgets */;
+			targetProxy = 3D4743EDFB114BACB07F2BF3 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -619,6 +707,27 @@
 			};
 			name = Debug;
 		};
+		69777C88D3954A1825E9573C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				DEVELOPMENT_TEAM = FXB7YX3ZD4;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Resources/WidgetsInfo.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.chromascan.remote.widgets;
+				PRODUCT_NAME = ChromaScanWidgets;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
 		792325E71724C8450583A4CE /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -709,6 +818,27 @@
 			};
 			name = Debug;
 		};
+		C3BA43F485C47398B74A349E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				DEVELOPMENT_TEAM = FXB7YX3ZD4;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Resources/WidgetsInfo.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.chromascan.remote.widgets;
+				PRODUCT_NAME = ChromaScanWidgets;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -744,6 +874,15 @@
 			buildConfigurations = (
 				29C16F2EBB8E83FADD08777D /* Debug */,
 				A362137C0E312EB6A9C98B03 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		9ECEA0A40A7AB7953954DFA9 /* Build configuration list for PBXNativeTarget "ChromaScanWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				69777C88D3954A1825E9573C /* Debug */,
+				C3BA43F485C47398B74A349E /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

@@ -128,6 +128,7 @@ enum ClientMessage: Equatable, Sendable {
     case requestTile(requestID: UInt32, normalizedRect: NormalizedCropRect, maxPixelWidth: Int)
     case requestPhotosCopy(requestID: UInt32, format: OutputFormat, quality: Double)
     case registerPushToken(deviceToken: String?, environment: PushEnvironment, enabled: Bool, bundleID: String? = nil)
+    case registerLiveActivityToken(activityPushToken: String?, environment: PushEnvironment, bundleID: String? = nil)
     case ping
 }
 
@@ -151,6 +152,7 @@ extension ClientMessage: Codable {
         case format
         case quality
         case deviceToken
+        case activityPushToken
         case environment
         case enabled
         case bundleID
@@ -210,6 +212,12 @@ extension ClientMessage: Codable {
                 deviceToken: try c.decodeIfPresent(String.self, forKey: .deviceToken),
                 environment: try c.decode(PushEnvironment.self, forKey: .environment),
                 enabled: try c.decode(Bool.self, forKey: .enabled),
+                bundleID: try c.decodeIfPresent(String.self, forKey: .bundleID)
+            )
+        case "registerLiveActivityToken":
+            self = .registerLiveActivityToken(
+                activityPushToken: try c.decodeIfPresent(String.self, forKey: .activityPushToken),
+                environment: try c.decode(PushEnvironment.self, forKey: .environment),
                 bundleID: try c.decodeIfPresent(String.self, forKey: .bundleID)
             )
         case "ping":
@@ -272,6 +280,11 @@ extension ClientMessage: Codable {
             try c.encodeIfPresent(deviceToken, forKey: .deviceToken)
             try c.encode(environment, forKey: .environment)
             try c.encode(enabled, forKey: .enabled)
+            try c.encodeIfPresent(bundleID, forKey: .bundleID)
+        case .registerLiveActivityToken(let activityPushToken, let environment, let bundleID):
+            try c.encode("registerLiveActivityToken", forKey: .type)
+            try c.encodeIfPresent(activityPushToken, forKey: .activityPushToken)
+            try c.encode(environment, forKey: .environment)
             try c.encodeIfPresent(bundleID, forKey: .bundleID)
         case .ping:
             try c.encode("ping", forKey: .type)

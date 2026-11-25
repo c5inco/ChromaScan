@@ -30,6 +30,18 @@ final class CompanionServer {
     private var lastProgressBroadcastTime: CFAbsoluteTime = 0
     private var proxyBroadcastTask: Task<Void, Never>?
 
+    private struct LiveActivityTarget: Equatable, Sendable {
+        let activityPushToken: String
+        var environment: PushEnvironment
+        let bundleID: String?
+    }
+
+    private var activeLiveActivityTargets: [String: LiveActivityTarget] = [:] // authToken -> target
+    private var lastLiveActivityPushTime: CFAbsoluteTime = 0
+    private var lastLiveActivityPhase: ScanLiveActivityPhase?
+    private var isTrackingScanForLiveActivity: Bool = false
+    private let liveActivityUpdateInterval: TimeInterval = 8.0
+
     private let jsonEncoder = JSONEncoder()
     private let jsonDecoder = JSONDecoder()
 
@@ -149,6 +161,8 @@ final class CompanionServer {
             session.close()
         }
         sessions.removeAll()
+        activeLiveActivityTargets.removeAll()
+        isTrackingScanForLiveActivity = false
 
         listener?.cancel()
         listener = nil
@@ -168,6 +182,7 @@ final class CompanionServer {
             session.close()
         }
         sessions.removeAll()
+        activeLiveActivityTargets.removeAll()
         onStateChanged?()
     }
 
@@ -406,6 +421,23 @@ final class CompanionServer {
                 bundleID: bundleID
             )
             onStateChanged?()
+
+        case .registerLiveActivityToken(let activityPushToken, let environment, let bundleID):
+            guard let authToken = session.authToken else { return }
+            let clean = activityPushToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if clean.isEmpty {
+                activeLiveActivityTargets.removeValue(forKey: authToken)
+            } else {
+                let cleanBundle = bundleID?.trimmingCharacters(in: .whitespacesAndNewlines)
+                activeLiveActivityTargets[authToken] = LiveActivityTarget(
+                    activityPushToken: clean,
+                    environment: environment,
+                    bundleID: (cleanBundle?.isEmpty == false) ? cleanBundle : nil
+                )
+                if engine.isBusy && engine.activeOperation == .scan {
+                    isTrackingScanForLiveActivity = true
+                }
+            }
         }
     }
 
@@ -429,6 +461,38 @@ final class CompanionServer {
         case .snapshotChanged(let snapshot):
             updateBonjourTXTRecordIfNeeded()
             broadcastHostMessage(.snapshot(snapshot: snapshot))
+            if snapshot.isBusy && snapshot.activeOperation == .scan {
+                if !isTrackingScanForLiveActivity {
+                    isTrackingScanForLiveActivity = true
+                    lastLiveActivityPushTime = 0
+                    lastLiveActivityPhase = nil
+                }
+            } else if isTrackingScanForLiveActivity && !snapshot.isBusy {
+                // Cancellation emits snapshotChanged(isBusy: false, statusText: "Scan cancelled")
+                // without a follow-up scanCompleted or error event.
+                if snapshot.statusText == "Scan cancelled" {
+                    isTrackingScanForLiveActivity = false
+                    lastLiveActivityPhase = nil
+                    lastLiveActivityPushTime = 0
+                    let nowEpoch = Int(Date().timeIntervalSince1970)
+                    let cancelState = ScanLiveActivityContentState(
+                        phase: .failed,
+                        statusText: "Scan cancelled"
+                    )
+                    let payload = APNsLiveActivityPayload(
+                        event: .end,
+                        contentState: cancelState,
+                        timestamp: nowEpoch,
+                        dismissalDate: nowEpoch
+                    )
+                    let targets = drainLiveActivityTargets()
+                    if !targets.isEmpty {
+                        Task { [weak self] in
+                            await self?.deliverLiveActivityPush(payload, to: targets)
+                        }
+                    }
+                }
+            }
 
         case .displayImageUpdated(let cgImage, let truePixelSize, let summary, let generation, let kind, let dpi):
             let authed = authenticatedSessions()
@@ -473,6 +537,15 @@ final class CompanionServer {
 
         case .progress(let op, let bytesReceived, let expectedBytes, let elapsedSeconds, let statusText):
             let now = CFAbsoluteTimeGetCurrent()
+            if op == .scan {
+                isTrackingScanForLiveActivity = true
+                maybePushLiveActivityProgress(
+                    bytesReceived: bytesReceived,
+                    expectedBytes: expectedBytes,
+                    statusText: statusText,
+                    now: now
+                )
+            }
             if bytesReceived > 0 && bytesReceived < expectedBytes && (now - lastProgressBroadcastTime) < 0.12 {
                 return
             }
@@ -505,8 +578,28 @@ final class CompanionServer {
                 fileSizeBytes: fileSizeBytes,
                 elapsedSeconds: elapsedSeconds
             )
+            isTrackingScanForLiveActivity = false
+            lastLiveActivityPhase = nil
+            lastLiveActivityPushTime = 0
+            let completedLiveTargets = drainLiveActivityTargets()
+            let nowEpoch = Int(Date().timeIntervalSince1970)
+            let completedLivePayload = APNsLiveActivityPayload(
+                event: .end,
+                contentState: ScanLiveActivityContentState.completed(
+                    filename: filename,
+                    pixelWidth: pixelWidth,
+                    pixelHeight: pixelHeight,
+                    fileSizeBytes: fileSizeBytes
+                ),
+                timestamp: nowEpoch,
+                dismissalDate: nowEpoch + 15
+            )
             Task { [weak self] in
-                await self?.deliverAPNsPush(pushContent)
+                guard let self else { return }
+                if !completedLiveTargets.isEmpty {
+                    await self.deliverLiveActivityPush(completedLivePayload, to: completedLiveTargets)
+                }
+                await self.deliverAPNsPush(pushContent)
             }
 
         case .exportCompleted(let url, let fileSizeBytes, let elapsedSeconds):
@@ -520,6 +613,24 @@ final class CompanionServer {
 
         case .error(let title, let message):
             broadcastHostMessage(.error(title: title, message: message))
+            if isTrackingScanForLiveActivity {
+                isTrackingScanForLiveActivity = false
+                lastLiveActivityPhase = nil
+                lastLiveActivityPushTime = 0
+                let targets = drainLiveActivityTargets()
+                if !targets.isEmpty {
+                    let nowEpoch = Int(Date().timeIntervalSince1970)
+                    let payload = APNsLiveActivityPayload(
+                        event: .end,
+                        contentState: ScanLiveActivityContentState.failed(title: title, message: message),
+                        timestamp: nowEpoch,
+                        dismissalDate: nowEpoch + 10
+                    )
+                    Task { [weak self] in
+                        await self?.deliverLiveActivityPush(payload, to: targets)
+                    }
+                }
+            }
         }
     }
 
@@ -590,6 +701,95 @@ final class CompanionServer {
         }
         onStateChanged?()
         return deliveredCount > 0
+    }
+
+    // MARK: - Direct Mac -> APNs Live Activity Push Delivery
+
+    private func maybePushLiveActivityProgress(
+        bytesReceived: Int64,
+        expectedBytes: Int64,
+        statusText: String,
+        now: CFAbsoluteTime
+    ) {
+        guard !activeLiveActivityTargets.isEmpty, preferences.isAPNsConfigured else { return }
+
+        let state = ScanLiveActivityContentState.fromProgress(
+            bytesReceived: bytesReceived,
+            expectedBytes: expectedBytes,
+            statusText: statusText
+        )
+        let phaseChanged = (lastLiveActivityPhase != state.phase)
+        if !phaseChanged && (now - lastLiveActivityPushTime) < liveActivityUpdateInterval {
+            return
+        }
+        lastLiveActivityPhase = state.phase
+        lastLiveActivityPushTime = now
+
+        let targets = deduplicatedLiveActivityTargets()
+        let payload = APNsLiveActivityPayload(
+            event: .update,
+            contentState: state,
+            timestamp: Int(Date().timeIntervalSince1970),
+            dismissalDate: nil
+        )
+        Task { [weak self] in
+            await self?.deliverLiveActivityPush(payload, to: targets)
+        }
+    }
+
+    private func deduplicatedLiveActivityTargets() -> [(authToken: String, target: LiveActivityTarget)] {
+        var seenTokens = Set<String>()
+        var result: [(authToken: String, target: LiveActivityTarget)] = []
+        for (authToken, target) in activeLiveActivityTargets {
+            if seenTokens.insert(target.activityPushToken).inserted {
+                result.append((authToken: authToken, target: target))
+            }
+        }
+        return result
+    }
+
+    private func drainLiveActivityTargets() -> [(authToken: String, target: LiveActivityTarget)] {
+        let targets = deduplicatedLiveActivityTargets()
+        activeLiveActivityTargets.removeAll()
+        return targets
+    }
+
+    private func deliverLiveActivityPush(
+        _ payload: APNsLiveActivityPayload,
+        to targets: [(authToken: String, target: LiveActivityTarget)]
+    ) async {
+        guard let config = preferences.apnsConfiguration, !targets.isEmpty else { return }
+
+        for entry in targets {
+            let bundleID = entry.target.bundleID ?? config.bundleID
+            let deviceConfig = APNsConfiguration(
+                keyID: config.keyID,
+                teamID: config.teamID,
+                bundleID: bundleID,
+                privateKeyPEM: config.privateKeyPEM
+            )
+            let result = await apnsClient.sendLiveActivity(
+                payload: payload,
+                toActivityPushToken: entry.target.activityPushToken,
+                preferredEnvironment: entry.target.environment,
+                configuration: deviceConfig
+            )
+            switch result {
+            case .delivered(let actualEnv):
+                if var existing = activeLiveActivityTargets[entry.authToken],
+                   existing.activityPushToken == entry.target.activityPushToken,
+                   existing.environment != actualEnv {
+                    existing.environment = actualEnv
+                    activeLiveActivityTargets[entry.authToken] = existing
+                }
+            case .unregistered:
+                if activeLiveActivityTargets[entry.authToken]?.activityPushToken == entry.target.activityPushToken {
+                    activeLiveActivityTargets.removeValue(forKey: entry.authToken)
+                }
+            case .failed:
+                break
+            }
+        }
     }
 
     // MARK: - Wire Sending Helpers

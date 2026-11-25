@@ -278,9 +278,96 @@ final class CompanionIntegrationTests: XCTestCase {
         XCTAssertTrue(prefs.pushEligibleDevices.isEmpty)
     }
 
-    private func waitUntil(timeout: TimeInterval, condition: @escaping @MainActor () -> Bool) async throws {
+    func testMacSendsLiveActivityAPNsUpdatesAndEndWhenClientDisconnects() async throws {
+        let suite = "com.chromascan.liveactivity.integration.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let prefs = AppPreferences(defaults: defaults)
+        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("chromascan-la-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let testKey = P256.Signing.PrivateKey()
+        prefs.saveFolderURL = tmpDir
+        prefs.pairingPIN = "777888"
+        prefs.baseFilename = "live-001"
+        prefs.resolution = 300
+        prefs.apnsKeyID = "9A8B7C6D5E"
+        prefs.apnsTeamID = "FXB7YX3ZD4"
+        prefs.apnsBundleID = "com.chromascan.remote"
+        prefs.apnsPrivateKeyPEM = testKey.pemRepresentation
+
+        let mockAPNs = RecordingAPNsClient(result: .delivered(environment: .sandbox))
+        let browser = MockScannerBrowser()
+        let esclClient = MockESCLClient()
+        let engine = ScanSessionEngine(preferences: prefs, browser: browser, client: esclClient)
+        let server = CompanionServer(
+            engine: engine,
+            preferences: prefs,
+            advertiseBonjour: false,
+            port: 0,
+            apnsClient: mockAPNs
+        )
+
+        let scanner = DiscoveredScanner(
+            id: "hp-3830",
+            name: "HP OfficeJet 3830",
+            host: "hp3830.local",
+            port: 8080,
+            useTLS: false,
+            rootPath: "eSCL",
+            modelName: "OfficeJet 3830",
+            uuid: "hp-3830"
+        )
+        engine.startDiscovery()
+        browser.emit([scanner])
+        try await waitUntil(timeout: 2.0) { engine.capabilities != nil }
+
+        server.start()
+        defer { server.stop() }
+        try await waitUntil(timeout: 3.0) { server.isRunning && server.port != nil }
+        let port = try XCTUnwrap(server.port)
+
+        let ws = TestWebSocketClient(port: port)
+        try await ws.connect()
+        ws.send(.hello(protocolVersion: 1, clientName: "iPhone 17 Pro", pin: "777888", authToken: nil))
+        _ = try await ws.waitForHostMessage(timeout: 2.0) {
+            if case .welcome = $0 { return true }
+            return false
+        }
+
+        // Register ephemeral Live Activity push token, then disconnect (simulating locked phone)
+        ws.send(.registerLiveActivityToken(
+            activityPushToken: "liveactivitytoken0123456789",
+            environment: .sandbox,
+            bundleID: "com.chromascan.remote"
+        ))
+        try await Task.sleep(for: .milliseconds(80))
+        ws.close()
+        try await waitUntil(timeout: 2.0) { server.connectedClients.isEmpty }
+
+        // Run scan -> Mac should deliver Live Activity APNs update(s) and final .end push
+        engine.startScan()
+        try await waitUntil(timeout: 5.0) { !engine.isBusy && engine.lastSavedURL != nil }
+        try await waitUntil(timeout: 3.0) {
+            await mockAPNs.liveActivityDeliveries.contains(where: { $0.payload.event == .end })
+        }
+
+        let laDeliveries = await mockAPNs.liveActivityDeliveries
+        XCTAssertGreaterThanOrEqual(laDeliveries.count, 2)
+        XCTAssertTrue(laDeliveries.contains(where: { $0.payload.event == .update }))
+        let endDelivery = try XCTUnwrap(laDeliveries.last(where: { $0.payload.event == .end }))
+        XCTAssertEqual(endDelivery.activityPushToken, "liveactivitytoken0123456789")
+        XCTAssertEqual(endDelivery.bundleID, "com.chromascan.remote")
+        XCTAssertEqual(endDelivery.payload.contentState.phase, .completed)
+        XCTAssertEqual(endDelivery.payload.contentState.filename, "live-001.tiff")
+        XCTAssertNotNil(endDelivery.payload.dismissalDate)
+    }
+
+    private func waitUntil(timeout: TimeInterval, condition: @escaping @MainActor () async -> Bool) async throws {
         let deadline = Date().addingTimeInterval(timeout)
-        while !condition() {
+        while !(await condition()) {
             if Date() > deadline {
                 XCTFail("Timed out waiting for condition")
                 return
@@ -431,8 +518,16 @@ private actor RecordingAPNsClient: APNsPushing {
         let bundleID: String
     }
 
+    struct LiveActivityDelivery: Equatable, Sendable {
+        let payload: APNsLiveActivityPayload
+        let activityPushToken: String
+        let preferredEnvironment: PushEnvironment
+        let bundleID: String
+    }
+
     private var nextResult: APNsDeliveryResult
     private(set) var deliveries: [Delivery] = []
+    private(set) var liveActivityDeliveries: [LiveActivityDelivery] = []
 
     init(result: APNsDeliveryResult) {
         self.nextResult = result
@@ -451,6 +546,21 @@ private actor RecordingAPNsClient: APNsPushing {
         deliveries.append(Delivery(
             notification: notification,
             deviceToken: deviceToken,
+            preferredEnvironment: preferredEnvironment,
+            bundleID: configuration.bundleID
+        ))
+        return nextResult
+    }
+
+    func sendLiveActivity(
+        payload: APNsLiveActivityPayload,
+        toActivityPushToken activityPushToken: String,
+        preferredEnvironment: PushEnvironment,
+        configuration: APNsConfiguration
+    ) async -> APNsDeliveryResult {
+        liveActivityDeliveries.append(LiveActivityDelivery(
+            payload: payload,
+            activityPushToken: activityPushToken,
             preferredEnvironment: preferredEnvironment,
             bundleID: configuration.bundleID
         ))

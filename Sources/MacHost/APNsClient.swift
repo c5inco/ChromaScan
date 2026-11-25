@@ -183,6 +183,30 @@ struct APNsNotificationContent: Equatable, Sendable {
     }
 }
 
+enum APNsLiveActivityEvent: String, Equatable, Sendable {
+    case update
+    case end
+}
+
+struct APNsLiveActivityPayload: Equatable, Sendable {
+    let event: APNsLiveActivityEvent
+    let contentState: ScanLiveActivityContentState
+    let timestamp: Int
+    let dismissalDate: Int?
+
+    init(
+        event: APNsLiveActivityEvent,
+        contentState: ScanLiveActivityContentState,
+        timestamp: Int = Int(Date().timeIntervalSince1970),
+        dismissalDate: Int? = nil
+    ) {
+        self.event = event
+        self.contentState = contentState
+        self.timestamp = timestamp
+        self.dismissalDate = dismissalDate
+    }
+}
+
 enum APNsDeliveryResult: Equatable, Sendable {
     case delivered(environment: PushEnvironment)
     case unregistered
@@ -215,6 +239,13 @@ protocol APNsPushing: Sendable {
     func send(
         notification: APNsNotificationContent,
         toDeviceToken deviceToken: String,
+        preferredEnvironment: PushEnvironment,
+        configuration: APNsConfiguration
+    ) async -> APNsDeliveryResult
+
+    func sendLiveActivity(
+        payload: APNsLiveActivityPayload,
+        toActivityPushToken activityPushToken: String,
         preferredEnvironment: PushEnvironment,
         configuration: APNsConfiguration
     ) async -> APNsDeliveryResult
@@ -349,6 +380,50 @@ actor APNsClient: APNsPushing {
         return firstResult
     }
 
+    func sendLiveActivity(
+        payload: APNsLiveActivityPayload,
+        toActivityPushToken activityPushToken: String,
+        preferredEnvironment: PushEnvironment,
+        configuration: APNsConfiguration
+    ) async -> APNsDeliveryResult {
+        let cleanToken = activityPushToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanToken.isEmpty else {
+            return .failed(statusCode: 0, reason: "Missing live activity push token")
+        }
+
+        let jwt: String
+        do {
+            jwt = try validJWT(for: configuration)
+        } catch {
+            apnsLog.error("APNs JWT signing failed: \(error.localizedDescription, privacy: .public)")
+            return .failed(statusCode: 0, reason: error.localizedDescription)
+        }
+
+        let firstResult = await postLiveActivityToAPNs(
+            payload: payload,
+            activityPushToken: cleanToken,
+            environment: preferredEnvironment,
+            configuration: configuration,
+            jwt: jwt
+        )
+
+        if case .failed(let status, let reason) = firstResult,
+           status == 400,
+           reason == "BadDeviceToken" {
+            let fallbackEnv = preferredEnvironment.opposite
+            apnsLog.notice("APNs Live Activity returned BadDeviceToken on \(preferredEnvironment.rawValue, privacy: .public); retrying on \(fallbackEnv.rawValue, privacy: .public)")
+            return await postLiveActivityToAPNs(
+                payload: payload,
+                activityPushToken: cleanToken,
+                environment: fallbackEnv,
+                configuration: configuration,
+                jwt: jwt
+            )
+        }
+
+        return firstResult
+    }
+
     private func validJWT(for configuration: APNsConfiguration) throws -> String {
         let now = Date()
         if let cached = cachedJWT,
@@ -439,5 +514,75 @@ actor APNsClient: APNsPushing {
             return nil
         }
         return reason
+    }
+
+    private func postLiveActivityToAPNs(
+        payload: APNsLiveActivityPayload,
+        activityPushToken: String,
+        environment: PushEnvironment,
+        configuration: APNsConfiguration,
+        jwt: String
+    ) async -> APNsDeliveryResult {
+        let host = (environment == .sandbox)
+            ? "api.sandbox.push.apple.com"
+            : "api.push.apple.com"
+        guard let url = URL(string: "https://\(host)/3/device/\(activityPushToken)") else {
+            return .failed(statusCode: 0, reason: "Invalid APNs live activity token URL")
+        }
+
+        let baseBundleID = configuration.bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let topic = baseBundleID.hasSuffix(".push-type.liveactivity")
+            ? baseBundleID
+            : "\(baseBundleID).push-type.liveactivity"
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 15
+        request.setValue("bearer \(jwt)", forHTTPHeaderField: "authorization")
+        request.setValue(topic, forHTTPHeaderField: "apns-topic")
+        request.setValue("liveactivity", forHTTPHeaderField: "apns-push-type")
+        request.setValue("10", forHTTPHeaderField: "apns-priority")
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+
+        do {
+            let stateData = try JSONEncoder().encode(payload.contentState)
+            guard let stateJSON = try JSONSerialization.jsonObject(with: stateData) as? [String: Any] else {
+                return .failed(statusCode: 0, reason: "Failed to encode Live Activity content-state")
+            }
+            var aps: [String: Any] = [
+                "timestamp": payload.timestamp,
+                "event": payload.event.rawValue,
+                "content-state": stateJSON
+            ]
+            if let dismissalDate = payload.dismissalDate {
+                aps["dismissal-date"] = dismissalDate
+            }
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["aps": aps], options: [.sortedKeys])
+        } catch {
+            return .failed(statusCode: 0, reason: "Failed to encode APNs Live Activity JSON payload")
+        }
+
+        do {
+            let (data, response) = try await transport.send(request)
+            let status = response.statusCode
+            if status == 200 {
+                apnsLog.notice("APNs Live Activity \(payload.event.rawValue, privacy: .public) delivered (\(environment.rawValue, privacy: .public))")
+                return .delivered(environment: environment)
+            }
+
+            let reason = Self.extractReason(from: data) ?? HTTPURLResponse.localizedString(forStatusCode: status)
+            if status == 410 || reason == "Unregistered" {
+                apnsLog.notice("APNs Live Activity token unregistered (HTTP \(status))")
+                return .unregistered
+            }
+            if status == 403 && reason == "ExpiredProviderToken" {
+                cachedJWT = nil
+            }
+            apnsLog.error("APNs Live Activity push failed (HTTP \(status)): \(reason, privacy: .public)")
+            return .failed(statusCode: status, reason: reason)
+        } catch {
+            apnsLog.error("APNs Live Activity network error: \(error.localizedDescription, privacy: .public)")
+            return .failed(statusCode: 0, reason: error.localizedDescription)
+        }
     }
 }

@@ -37,6 +37,8 @@ final class CompanionProtocolTests: XCTestCase {
             .requestPhotosCopy(requestID: 7, format: .heic, quality: 0.92),
             .registerPushToken(deviceToken: "aabbccddeeff00112233", environment: .sandbox, enabled: true, bundleID: "com.alice.chromascan.remote"),
             .registerPushToken(deviceToken: nil, environment: .production, enabled: false, bundleID: nil),
+            .registerLiveActivityToken(activityPushToken: "ff00112233445566", environment: .sandbox, bundleID: "com.chromascan.remote"),
+            .registerLiveActivityToken(activityPushToken: nil, environment: .production, bundleID: nil),
             .ping
         ]
 
@@ -308,6 +310,63 @@ final class CompanionProtocolTests: XCTestCase {
             configuration: config
         )
         XCTAssertEqual(unregResult, .unregistered)
+    }
+
+    func testAPNsClientLiveActivityPushHeadersPayloadAndFallback() async throws {
+        let key = P256.Signing.PrivateKey()
+        let config = APNsConfiguration(
+            keyID: "9A8B7C6D5E",
+            teamID: "FXB7YX3ZD4",
+            bundleID: "com.chromascan.remote",
+            privateKeyPEM: key.pemRepresentation
+        )
+
+        let transport = MockAPNsHTTPTransport { request in
+            let url = try XCTUnwrap(request.url)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "apns-topic"), "com.chromascan.remote.push-type.liveactivity")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "apns-push-type"), "liveactivity")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "apns-priority"), "10")
+
+            let body = try XCTUnwrap(request.httpBody)
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            let aps = try XCTUnwrap(json["aps"] as? [String: Any])
+            XCTAssertEqual(aps["event"] as? String, "end")
+            XCTAssertEqual(aps["timestamp"] as? Int, 1_750_000_100)
+            XCTAssertEqual(aps["dismissal-date"] as? Int, 1_750_000_115)
+            let contentState = try XCTUnwrap(aps["content-state"] as? [String: Any])
+            XCTAssertEqual(contentState["phase"] as? String, "completed")
+            XCTAssertEqual(contentState["filename"] as? String, "art-001.tiff")
+
+            if url.host == "api.sandbox.push.apple.com" {
+                let resp = HTTPURLResponse(url: url, statusCode: 400, httpVersion: "2.0", headerFields: nil)!
+                return (Data(#"{"reason":"BadDeviceToken"}"#.utf8), resp)
+            } else {
+                let resp = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "2.0", headerFields: nil)!
+                return (Data(), resp)
+            }
+        }
+
+        let client = APNsClient(transport: transport)
+        let payload = APNsLiveActivityPayload(
+            event: .end,
+            contentState: ScanLiveActivityContentState.completed(
+                filename: "art-001.tiff",
+                pixelWidth: 4800,
+                pixelHeight: 6400,
+                fileSizeBytes: 52_428_800
+            ),
+            timestamp: 1_750_000_100,
+            dismissalDate: 1_750_000_115
+        )
+        let result = await client.sendLiveActivity(
+            payload: payload,
+            toActivityPushToken: "la001122334455",
+            preferredEnvironment: .sandbox,
+            configuration: config
+        )
+        XCTAssertEqual(result, .delivered(environment: .production))
+        let requestedHosts = await transport.recordedHosts
+        XCTAssertEqual(requestedHosts, ["api.sandbox.push.apple.com", "api.push.apple.com"])
     }
 
     @MainActor

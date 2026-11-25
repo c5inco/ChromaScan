@@ -63,6 +63,7 @@ final class RemoteSessionStore {
     var errorAlert: RemoteErrorAlert?
     private(set) var isSavingToPhotos: Bool = false
     private(set) var notifyOnScanComplete: Bool
+    private(set) var liveActivityEnabled: Bool
     private(set) var notificationAuthorizationStatus: UNAuthorizationStatus = .notDetermined
     private(set) var apnsDeviceToken: String?
     private(set) var hostAPNsConfigured: Bool = false
@@ -70,6 +71,14 @@ final class RemoteSessionStore {
 
     var isDirectAPNsActive: Bool {
         notifyOnScanComplete && hostAPNsConfigured && (apnsDeviceToken?.isEmpty == false)
+    }
+
+    var isLiveActivityActive: Bool {
+        liveActivityManager.hasActiveActivity
+    }
+
+    var areLiveActivitiesAvailable: Bool {
+        liveActivityManager.areActivitiesSupportedAndEnabled
     }
 
     var currentPushEnvironment: PushEnvironment {
@@ -83,6 +92,7 @@ final class RemoteSessionStore {
     private let userDefaults: UserDefaults
     private let notifier: any ScanCompletionNotifying
     private let backgroundTaskManager: any BackgroundTaskManaging
+    private let liveActivityManager: any ScanLiveActivityManaging
 
     // Manual connection persistence
     var lastManualHost: String {
@@ -108,8 +118,11 @@ final class RemoteSessionStore {
     private var imageDecodeTask: Task<Void, Never>?
     private var tileDecodeTask: Task<Void, Never>?
     private var deferredEndBackgroundTask: Task<Void, Never>?
+    private var deferredEndLiveActivityTask: Task<Void, Never>?
+    private var latestLiveActivityPushToken: String?
 
     private static let notifyOnScanCompleteKey = "remote.notifyOnScanComplete"
+    private static let liveActivityEnabledKey = "remote.liveActivityEnabled"
 
     private struct FrameKey: Hashable {
         let kind: CompanionFrameKind
@@ -122,7 +135,8 @@ final class RemoteSessionStore {
         tokenStore: KeychainTokenStore = KeychainTokenStore(),
         userDefaults: UserDefaults = .standard,
         notifier: (any ScanCompletionNotifying)? = nil,
-        backgroundTaskManager: (any BackgroundTaskManaging)? = nil
+        backgroundTaskManager: (any BackgroundTaskManaging)? = nil,
+        liveActivityManager: (any ScanLiveActivityManaging)? = nil
     ) {
         self.userDefaults = userDefaults
         if userDefaults.object(forKey: Self.notifyOnScanCompleteKey) == nil {
@@ -130,22 +144,39 @@ final class RemoteSessionStore {
         } else {
             self.notifyOnScanComplete = userDefaults.bool(forKey: Self.notifyOnScanCompleteKey)
         }
+        if userDefaults.object(forKey: Self.liveActivityEnabledKey) == nil {
+            self.liveActivityEnabled = true
+        } else {
+            self.liveActivityEnabled = userDefaults.bool(forKey: Self.liveActivityEnabledKey)
+        }
+        let isRunningTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
         if let notifier {
             self.notifier = notifier
-        } else if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+        } else if isRunningTests {
             self.notifier = NoOpScanCompletionNotifier()
         } else {
             self.notifier = UserNotificationScanNotifier.shared
         }
         self.backgroundTaskManager = backgroundTaskManager ?? UIApplicationBackgroundTaskManager()
+        if let liveActivityManager {
+            self.liveActivityManager = liveActivityManager
+        } else if isRunningTests {
+            self.liveActivityManager = NoOpScanLiveActivityManager()
+        } else {
+            self.liveActivityManager = ActivityKitScanLiveActivityManager()
+        }
         self.client = CompanionClient(clientName: clientName, tokenStore: tokenStore)
+        self.liveActivityManager.onPushTokenUpdated = { [weak self] token in
+            self?.handleLiveActivityPushTokenUpdated(token)
+        }
         wireClientCallbacks()
-        if notifier == nil && ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+        if notifier == nil && !isRunningTests {
             self.apnsDeviceToken = PushTokenRelay.shared.latestDeviceToken
             PushTokenRelay.shared.onTokenUpdated = { [weak self] token in
                 self?.updateAPNsDeviceToken(token)
             }
         }
+        self.liveActivityManager.cleanupOrphanedActivities()
         browser.start()
         applyLaunchArgumentsIfPresent()
         refreshNotificationAuthorizationStatus()
@@ -210,6 +241,7 @@ final class RemoteSessionStore {
 
     func disconnect() {
         endScanBackgroundTaskImmediately()
+        endLiveActivity(finalState: nil, dismissImmediately: true)
         client.disconnect(clearTarget: true)
         phase = .browsing
         snapshot = nil
@@ -257,6 +289,16 @@ final class RemoteSessionStore {
         syncPushRegistrationWithHost()
     }
 
+    func setLiveActivityEnabled(_ enabled: Bool) {
+        liveActivityEnabled = enabled
+        userDefaults.set(enabled, forKey: Self.liveActivityEnabledKey)
+        if !enabled {
+            endLiveActivity(finalState: nil, dismissImmediately: true)
+        } else if isScanActive, !isAppInBackground, let snap = snapshot {
+            startLiveActivityIfNeeded(for: snap, progress: progress)
+        }
+    }
+
     func updateAPNsDeviceToken(_ token: String) {
         let clean = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
@@ -296,6 +338,75 @@ final class RemoteSessionStore {
             enabled: notifyOnScanComplete,
             bundleID: Bundle.main.bundleIdentifier
         ))
+    }
+
+    private func handleLiveActivityPushTokenUpdated(_ token: String?) {
+        let clean = token?.trimmingCharacters(in: .whitespacesAndNewlines)
+        latestLiveActivityPushToken = (clean?.isEmpty == false) ? clean : nil
+        syncLiveActivityPushTokenWithHost()
+    }
+
+    private func syncLiveActivityPushTokenWithHost() {
+        guard case .connected = phase else { return }
+        client.send(.registerLiveActivityToken(
+            activityPushToken: latestLiveActivityPushToken,
+            environment: currentPushEnvironment,
+            bundleID: Bundle.main.bundleIdentifier
+        ))
+    }
+
+    private func startLiveActivityIfNeeded(for snap: SessionSnapshot, progress: RemoteProgressState?) {
+        guard liveActivityEnabled, !isAppInBackground, !liveActivityManager.hasActiveActivity else { return }
+        deferredEndLiveActivityTask?.cancel()
+        deferredEndLiveActivityTask = nil
+
+        let scannerName = snap.selectedScanner?.displayTitle ?? "Scanner"
+        let profileName = snap.settings.colorMode == .grayscale8
+            ? "Grayscale"
+            : snap.settings.colorProfile.shortName
+        let startedAt = Date().addingTimeInterval(-(progress?.elapsedSeconds ?? 0))
+        let initialState: ScanLiveActivityContentState
+        if let progress, progress.operation == .scan {
+            initialState = ScanLiveActivityContentState.fromProgress(
+                bytesReceived: progress.bytesReceived,
+                expectedBytes: progress.expectedBytes,
+                statusText: progress.statusText
+            )
+        } else {
+            initialState = ScanLiveActivityContentState(
+                phase: .starting,
+                statusText: "Starting scanner…"
+            )
+        }
+
+        liveActivityManager.start(
+            scannerName: scannerName,
+            resolutionDPI: snap.settings.resolution,
+            colorProfileName: profileName,
+            outputFormatName: snap.settings.outputFormat.displayName,
+            startedAt: startedAt,
+            initialState: initialState
+        )
+    }
+
+    private func endLiveActivity(finalState: ScanLiveActivityContentState?, dismissImmediately: Bool) {
+        deferredEndLiveActivityTask?.cancel()
+        deferredEndLiveActivityTask = nil
+        guard liveActivityManager.hasActiveActivity else { return }
+        liveActivityManager.end(finalState: finalState, dismissImmediately: dismissImmediately)
+    }
+
+    private func scheduleDeferredEndLiveActivity() {
+        guard liveActivityManager.hasActiveActivity else { return }
+        deferredEndLiveActivityTask?.cancel()
+        deferredEndLiveActivityTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.0))
+            guard let self, !Task.isCancelled else { return }
+            self.deferredEndLiveActivityTask = nil
+            if !self.isScanActive {
+                self.liveActivityManager.end(finalState: nil, dismissImmediately: true)
+            }
+        }
     }
 
     private func endScanBackgroundTaskImmediately() {
@@ -671,6 +782,11 @@ final class RemoteSessionStore {
             phase = .connected(hostID: hostID, hostName: hostName)
             applyIncomingSnapshot(snap)
             syncPushRegistrationWithHost()
+            if liveActivityManager.hasActiveActivity && isScanActive {
+                syncLiveActivityPushTokenWithHost()
+            } else if !isScanActive {
+                endLiveActivity(finalState: nil, dismissImmediately: true)
+            }
             refreshNotificationAuthorizationStatus()
 
         case .authRequired(let hostID, let hostName, let reason):
@@ -683,13 +799,27 @@ final class RemoteSessionStore {
             applyIncomingSnapshot(snap)
 
         case .progress(let op, let recv, let exp, let elapsed, let text):
-            progress = RemoteProgressState(
+            let newProgress = RemoteProgressState(
                 operation: op,
                 bytesReceived: recv,
                 expectedBytes: exp,
                 elapsedSeconds: elapsed,
                 statusText: text
             )
+            progress = newProgress
+            if op == .scan {
+                if !liveActivityManager.hasActiveActivity, let snap = snapshot {
+                    startLiveActivityIfNeeded(for: snap, progress: newProgress)
+                }
+                if liveActivityManager.hasActiveActivity {
+                    let state = ScanLiveActivityContentState.fromProgress(
+                        bytesReceived: recv,
+                        expectedBytes: exp,
+                        statusText: text
+                    )
+                    liveActivityManager.update(state)
+                }
+            }
 
         case .imageReady(let info):
             let key = FrameKey(kind: info.kind.frameKind, generation: info.generation, requestID: info.requestID)
@@ -704,6 +834,13 @@ final class RemoteSessionStore {
             progress = nil
             let mb = Double(bytes) / (1024.0 * 1024.0)
             showToast(String(format: "Saved %@ (%dx%d · %.1f MB)", filename, pxW, pxH, mb))
+            let completedState = ScanLiveActivityContentState.completed(
+                filename: filename,
+                pixelWidth: pxW,
+                pixelHeight: pxH,
+                fileSizeBytes: bytes
+            )
+            endLiveActivity(finalState: completedState, dismissImmediately: !isAppInBackground)
             handleScanCompletedNotification(
                 filename: filename,
                 pixelWidth: pxW,
@@ -726,6 +863,8 @@ final class RemoteSessionStore {
         case .error(let title, let message):
             isSavingToPhotos = false
             endScanBackgroundTaskImmediately()
+            let failedState = ScanLiveActivityContentState.failed(title: title, message: message)
+            endLiveActivity(finalState: failedState, dismissImmediately: !isAppInBackground)
             errorAlert = RemoteErrorAlert(title: title, message: message)
 
         case .pong:
@@ -782,10 +921,18 @@ final class RemoteSessionStore {
         }
 
         let nowScanActive = isScanActive
-        if !wasScanActive && nowScanActive && notifyOnScanComplete {
-            requestNotificationPermissionIfNeeded()
+        if !wasScanActive && nowScanActive {
+            if notifyOnScanComplete {
+                requestNotificationPermissionIfNeeded()
+            }
+            startLiveActivityIfNeeded(for: snap, progress: progress)
         } else if wasScanActive && !nowScanActive {
             scheduleDeferredEndScanBackgroundTask()
+            if snap.statusText.localizedCaseInsensitiveContains("cancel") {
+                endLiveActivity(finalState: nil, dismissImmediately: true)
+            } else {
+                scheduleDeferredEndLiveActivity()
+            }
         }
 
         if modeChanged || genChanged {

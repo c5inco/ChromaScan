@@ -385,6 +385,19 @@ struct RemoteControlsSheet: View {
                 Label("Notify When Scan Completes", systemImage: "bell.badge")
             }
 
+            Toggle(isOn: Binding(
+                get: { store.liveActivityEnabled },
+                set: { store.setLiveActivityEnabled($0) }
+            )) {
+                Label("Live Activity & Dynamic Island", systemImage: "platter.filled.top.iphone")
+            }
+
+            if store.liveActivityEnabled && !store.areLiveActivitiesAvailable {
+                Text("Live Activities are turned off in iOS Settings for ChromaScan.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             if store.notifyOnScanComplete && store.notificationAuthorizationStatus == .denied {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Notifications are turned off in iOS Settings for ChromaScan.")

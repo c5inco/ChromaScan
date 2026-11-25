@@ -350,6 +350,111 @@ final class ChromaScanRemoteTests: XCTestCase {
         }
     }
 
+    func testLiveActivityStartsImmediatelyUpdatesSyncsTokenAndEndsAcrossScanLifecycle() async throws {
+        let mockHost = try LoopbackMockMacHost(pin: "123456", apnsConfigured: true)
+        let port = try await mockHost.start()
+        defer { mockHost.stop() }
+
+        let tokenStore = KeychainTokenStore()
+        tokenStore.deleteToken(for: "mock-mac-studio")
+        tokenStore.deleteToken(for: "manual:127.0.0.1:\(port)")
+
+        let suiteName = "com.chromascan.liveactivity.ios.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let mockNotifier = MockScanCompletionNotifier(initialStatus: .authorized, statusAfterRequest: .authorized)
+        let mockBG = MockBackgroundTaskManager()
+        let mockLA = MockScanLiveActivityManager()
+
+        let store = RemoteSessionStore(
+            clientName: "Simulator iPhone",
+            tokenStore: tokenStore,
+            userDefaults: defaults,
+            notifier: mockNotifier,
+            backgroundTaskManager: mockBG,
+            liveActivityManager: mockLA
+        )
+        defer { store.disconnect() }
+
+        XCTAssertTrue(store.liveActivityEnabled)
+
+        store.connectManual(host: "127.0.0.1", port: port, pin: "123456")
+        try await waitUntil(timeout: 3.0) {
+            if case .connected = store.phase, store.snapshot != nil { return true }
+            return false
+        }
+
+        // 1. Trigger scan -> Live Activity starts immediately and syncs its push token to Mac
+        store.triggerScan()
+        try await waitUntil(timeout: 2.0) {
+            store.isScanActive && mockLA.startCount == 1
+        }
+        XCTAssertTrue(mockLA.hasActiveActivity)
+        XCTAssertEqual(mockLA.lastResolutionDPI, 1200)
+        try await waitUntil(timeout: 2.0) {
+            mockHost.lastRegisteredLiveActivityToken == "mock-la-token-1"
+        }
+
+        // 2. Progress updates flow into Live Activity state
+        mockHost.broadcastProgress(
+            operation: .scan,
+            bytesReceived: 50 * 1024 * 1024,
+            expectedBytes: 100 * 1024 * 1024,
+            elapsedSeconds: 32,
+            statusText: "Scanning 1200 DPI · 50.0 / 100.0 MB (32s)"
+        )
+        try await waitUntil(timeout: 2.0) {
+            mockLA.updates.last?.phase == .scanning && mockLA.updates.last?.progressPercent == 50
+        }
+
+        mockHost.broadcastProgress(
+            operation: .scan,
+            bytesReceived: 100 * 1024 * 1024,
+            expectedBytes: 100 * 1024 * 1024,
+            elapsedSeconds: 74,
+            statusText: "Processing & saving (Display P3)…"
+        )
+        try await waitUntil(timeout: 2.0) {
+            mockLA.updates.last?.phase == .processing
+        }
+
+        // 3. Scan completion while backgrounded -> ends Live Activity with completed state & non-immediate dismissal
+        store.handleScenePhaseBackground()
+        mockHost.broadcastScanCompleted(
+            filename: "live-done-001.tiff",
+            pixelWidth: 4800,
+            pixelHeight: 6400,
+            fileSizeBytes: 52_428_800,
+            elapsedSeconds: 78
+        )
+        try await waitUntil(timeout: 2.0) { mockLA.endCount == 1 }
+        XCTAssertFalse(mockLA.hasActiveActivity)
+        XCTAssertEqual(mockLA.lastEndFinalState?.phase, .completed)
+        XCTAssertEqual(mockLA.lastEndFinalState?.filename, "live-done-001.tiff")
+        XCTAssertEqual(mockLA.lastEndDismissImmediately, false)
+
+        // 4. Cancel in foreground -> starts then ends immediately with nil final state
+        store.handleScenePhaseActive()
+        store.triggerScan()
+        try await waitUntil(timeout: 2.0) { mockLA.startCount == 2 }
+        store.cancelActiveOperation()
+        try await waitUntil(timeout: 2.0) { mockLA.endCount == 2 }
+        XCTAssertEqual(mockLA.lastEndDismissImmediately, true)
+        XCTAssertNil(mockLA.lastEndFinalState)
+
+        // 5. Disabling Live Activity toggle prevents starting on subsequent scans
+        store.setLiveActivityEnabled(false)
+        XCTAssertFalse(store.liveActivityEnabled)
+        XCTAssertFalse(defaults.bool(forKey: "remote.liveActivityEnabled"))
+
+        store.triggerScan()
+        try await waitUntil(timeout: 2.0) { store.isScanActive }
+        XCTAssertEqual(mockLA.startCount, 2)
+        store.cancelActiveOperation()
+        try await waitUntil(timeout: 2.0) { !store.isScanActive }
+    }
+
     private func waitUntil(timeout: TimeInterval, condition: @escaping @MainActor () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition() {
@@ -381,6 +486,7 @@ private final class LoopbackMockMacHost {
     private var isScanTrimmed: Bool = false
     private(set) var lastRegisteredPushToken: String?
     private(set) var lastPushEnabled: Bool?
+    private(set) var lastRegisteredLiveActivityToken: String?
 
     init(pin: String, apnsConfigured: Bool = false) throws {
         self.pin = pin
@@ -521,6 +627,9 @@ private final class LoopbackMockMacHost {
         case .registerPushToken(let deviceToken, _, let enabled, _):
             lastRegisteredPushToken = deviceToken
             lastPushEnabled = enabled
+
+        case .registerLiveActivityToken(let activityPushToken, _, _):
+            lastRegisteredLiveActivityToken = activityPushToken
 
         default:
             break
@@ -703,4 +812,49 @@ private final class MockBackgroundTaskManager: BackgroundTaskManaging {
         hasActiveTask = false
         endCount += 1
     }
+}
+
+@MainActor
+private final class MockScanLiveActivityManager: ScanLiveActivityManaging {
+    private(set) var hasActiveActivity = false
+    var areActivitiesSupportedAndEnabled = true
+    var onPushTokenUpdated: ((String?) -> Void)?
+
+    private(set) var startCount = 0
+    private(set) var endCount = 0
+    private(set) var lastResolutionDPI: Int?
+    private(set) var updates: [ScanLiveActivityContentState] = []
+    private(set) var lastEndFinalState: ScanLiveActivityContentState?
+    private(set) var lastEndDismissImmediately: Bool?
+
+    func start(
+        scannerName: String,
+        resolutionDPI: Int,
+        colorProfileName: String,
+        outputFormatName: String,
+        startedAt: Date,
+        initialState: ScanLiveActivityContentState
+    ) {
+        hasActiveActivity = true
+        startCount += 1
+        lastResolutionDPI = resolutionDPI
+        updates.append(initialState)
+        onPushTokenUpdated?("mock-la-token-\(startCount)")
+    }
+
+    func update(_ state: ScanLiveActivityContentState) {
+        guard hasActiveActivity else { return }
+        updates.append(state)
+    }
+
+    func end(finalState: ScanLiveActivityContentState?, dismissImmediately: Bool) {
+        guard hasActiveActivity else { return }
+        hasActiveActivity = false
+        endCount += 1
+        lastEndFinalState = finalState
+        lastEndDismissImmediately = dismissImmediately
+        onPushTokenUpdated?(nil)
+    }
+
+    func cleanupOrphanedActivities() {}
 }
