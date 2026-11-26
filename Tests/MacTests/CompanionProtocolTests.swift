@@ -222,7 +222,7 @@ final class CompanionProtocolTests: XCTestCase {
         let key = P256.Signing.PrivateKey()
         let config = APNsConfiguration(
             keyID: "9A8B7C6D5E",
-            teamID: "FXB7YX3ZD4",
+            teamID: "TEAM123456",
             bundleID: "com.chromascan.remote",
             privateKeyPEM: key.pemRepresentation
         )
@@ -243,7 +243,7 @@ final class CompanionProtocolTests: XCTestCase {
         XCTAssertEqual(header["kid"] as? String, "9A8B7C6D5E")
 
         let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: try base64URLDecode(parts[1])) as? [String: Any])
-        XCTAssertEqual(payload["iss"] as? String, "FXB7YX3ZD4")
+        XCTAssertEqual(payload["iss"] as? String, "TEAM123456")
         XCTAssertEqual(payload["iat"] as? Int, 1_750_000_000)
 
         let rawSig = try base64URLDecode(parts[2])
@@ -257,7 +257,7 @@ final class CompanionProtocolTests: XCTestCase {
         let key = P256.Signing.PrivateKey()
         let config = APNsConfiguration(
             keyID: "9A8B7C6D5E",
-            teamID: "FXB7YX3ZD4",
+            teamID: "TEAM123456",
             bundleID: "com.chromascan.remote",
             privateKeyPEM: key.pemRepresentation
         )
@@ -316,7 +316,7 @@ final class CompanionProtocolTests: XCTestCase {
         let key = P256.Signing.PrivateKey()
         let config = APNsConfiguration(
             keyID: "9A8B7C6D5E",
-            teamID: "FXB7YX3ZD4",
+            teamID: "TEAM123456",
             bundleID: "com.chromascan.remote",
             privateKeyPEM: key.pemRepresentation
         )
@@ -369,24 +369,83 @@ final class CompanionProtocolTests: XCTestCase {
         XCTAssertEqual(requestedHosts, ["api.sandbox.push.apple.com", "api.push.apple.com"])
     }
 
-    @MainActor
-    func testLocalAPNSDirectoryAutoDiscovery() throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("chromascan-apns-dir-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-
+    func testAPNsClientRetriesOnceOnExpiredProviderTokenAndFormatsFriendlyErrors() async throws {
         let key = P256.Signing.PrivateKey()
-        try key.pemRepresentation.write(
-            to: dir.appendingPathComponent("AuthKey_9A8B7C6D5E.p8"),
+        let config = APNsConfiguration(
+            keyID: "9A8B7C6D5E",
+            teamID: "TEAM123456",
+            bundleID: "com.example.chromascan.remote",
+            privateKeyPEM: key.pemRepresentation
+        )
+
+        final class AttemptCounter: @unchecked Sendable {
+            private let lock = NSLock()
+            private var count = 0
+            func next() -> Int {
+                lock.lock()
+                defer { lock.unlock() }
+                count += 1
+                return count
+            }
+        }
+        let counter = AttemptCounter()
+        let transport = MockAPNsHTTPTransport { request in
+            let url = try XCTUnwrap(request.url)
+            if counter.next() == 1 {
+                let resp = HTTPURLResponse(url: url, statusCode: 403, httpVersion: "2.0", headerFields: nil)!
+                return (Data(#"{"reason":"ExpiredProviderToken"}"#.utf8), resp)
+            } else {
+                let resp = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "2.0", headerFields: nil)!
+                return (Data(), resp)
+            }
+        }
+
+        let client = APNsClient(transport: transport)
+        let content = APNsNotificationContent.testNotification(hostName: "Studio Mac")
+        let result = await client.send(
+            notification: content,
+            toDeviceToken: "deadbeef00112233",
+            preferredEnvironment: .sandbox,
+            configuration: config
+        )
+        XCTAssertEqual(result, .delivered(environment: .sandbox))
+        let hosts = await transport.recordedHosts
+        XCTAssertEqual(hosts, ["api.sandbox.push.apple.com", "api.sandbox.push.apple.com"])
+
+        XCTAssertTrue(
+            APNsDeliveryResult.friendlyErrorMessage(statusCode: 403, reason: "InvalidProviderToken")
+                .contains("Key ID and Team ID")
+        )
+        XCTAssertTrue(
+            APNsDeliveryResult.friendlyErrorMessage(statusCode: 400, reason: "DeviceTokenNotForTopic")
+                .contains("Bundle ID mismatch")
+        )
+    }
+
+    @MainActor
+    func testLocalAPNSDirectoryAutoDiscoveryAndBuildDefaults() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("chromascan-apns-dir-\(UUID().uuidString)", isDirectory: true)
+        let primaryDir = root.appendingPathComponent("primary", isDirectory: true)
+        let legacyDir = root.appendingPathComponent("legacy", isDirectory: true)
+        try FileManager.default.createDirectory(at: primaryDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: legacyDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let primaryKey = P256.Signing.PrivateKey()
+        let legacyKey = P256.Signing.PrivateKey()
+        try primaryKey.pemRepresentation.write(
+            to: primaryDir.appendingPathComponent("AuthKey_PRIMARY123.p8"),
             atomically: true,
             encoding: .utf8
         )
-        try """
-        # Local APNs config
-        export APNS_TEAM_ID="TEAM123456"
-        """.write(
-            to: dir.appendingPathComponent("apns.env"),
+        try legacyKey.pemRepresentation.write(
+            to: legacyDir.appendingPathComponent("AuthKey_LEGACY1234.p8"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "APNS_TEAM_ID=LEGACYTEAM\n".write(
+            to: legacyDir.appendingPathComponent("apns.env"),
             atomically: true,
             encoding: .utf8
         )
@@ -395,13 +454,205 @@ final class CompanionProtocolTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
 
-        let prefs = AppPreferences(defaults: defaults, apnsDirectoryURL: dir)
+        // Primary directory wins over legacy, and build-time Team ID + Bundle ID fill in with zero apns.env!
+        let prefs = AppPreferences(
+            defaults: defaults,
+            apnsSearchDirectoryURLs: [primaryDir, legacyDir],
+            buildTeamID: "BUILDTEAM1",
+            buildCompanionBundleID: "com.alice.chromascan.remote"
+        )
         XCTAssertTrue(prefs.isAPNsConfigured)
         XCTAssertTrue(prefs.isUsingLocalAPNsDirectoryKey)
         let config = try XCTUnwrap(prefs.apnsConfiguration)
-        XCTAssertEqual(config.keyID, "9A8B7C6D5E")
-        XCTAssertEqual(config.teamID, "TEAM123456")
-        XCTAssertEqual(config.bundleID, "com.chromascan.remote")
+        XCTAssertEqual(config.keyID, "PRIMARY123")
+        XCTAssertEqual(config.teamID, "BUILDTEAM1")
+        XCTAssertEqual(config.bundleID, "com.alice.chromascan.remote")
+        XCTAssertNil(defaults.string(forKey: "companion.apns.privateKeyPEM"))
+
+        // Build-time Team ID takes priority over a paired phone's reported Team ID
+        let device = prefs.mintPairedDevice(clientName: "Alice iPhone")
+        prefs.updatePushRegistration(
+            forAuthToken: device.token,
+            deviceToken: "00112233",
+            environment: .sandbox,
+            enabled: true,
+            bundleID: "com.bob.chromascan.remote",
+            teamID: "IPHNTEM999",
+            registrationError: nil
+        )
+        let updatedConfig = try XCTUnwrap(prefs.apnsConfiguration)
+        XCTAssertEqual(updatedConfig.teamID, "BUILDTEAM1")
+        XCTAssertEqual(updatedConfig.bundleID, "com.bob.chromascan.remote")
+        XCTAssertEqual(prefs.mismatchedTeamDeviceNames, ["Alice iPhone"])
+
+        // Without buildTeamID, an unambiguous push-eligible device Team ID is used as fallback
+        let suite2 = "com.chromascan.localapns.deviceteam.\(UUID().uuidString)"
+        let defaults2 = UserDefaults(suiteName: suite2)!
+        defer { defaults2.removePersistentDomain(forName: suite2) }
+        let prefs2 = AppPreferences(defaults: defaults2, apnsSearchDirectoryURLs: [primaryDir])
+        XCTAssertNil(prefs2.apnsConfiguration) // No Team ID yet
+        let dev2 = prefs2.mintPairedDevice(clientName: "Dev iPhone")
+        prefs2.updatePushRegistration(
+            forAuthToken: dev2.token,
+            deviceToken: "44556677",
+            environment: .sandbox,
+            enabled: true,
+            bundleID: "com.dev.chromascan.remote",
+            teamID: "DEVTEAM123",
+            registrationError: nil
+        )
+        XCTAssertEqual(prefs2.apnsConfiguration?.teamID, "DEVTEAM123")
+        // Verified environment is retained across reconnects when the device token is unchanged
+        prefs2.updateAPNsEnvironment(.production, forDeviceToken: "44556677")
+        prefs2.updatePushRegistration(
+            forAuthToken: dev2.token,
+            deviceToken: "44556677",
+            environment: .sandbox,
+            enabled: true,
+            bundleID: "com.dev.chromascan.remote",
+            teamID: "DEVTEAM123",
+            registrationError: nil
+        )
+        XCTAssertEqual(prefs2.pushEligibleDevices.first?.apnsEnvironment, .production)
+    }
+
+    @MainActor
+    func testLocalAPNsKeyRotationSelectionAndMismatchProtection() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("chromascan-apns-rot-\(UUID().uuidString)", isDirectory: true)
+        let primaryDir = root.appendingPathComponent("primary", isDirectory: true)
+        let legacyDir = root.appendingPathComponent("legacy", isDirectory: true)
+        try FileManager.default.createDirectory(at: primaryDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: legacyDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let keyA = P256.Signing.PrivateKey()
+        let keyZ = P256.Signing.PrivateKey()
+        try keyA.pemRepresentation.write(
+            to: primaryDir.appendingPathComponent("AuthKey_AAAAAAAAAA.p8"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try keyZ.pemRepresentation.write(
+            to: primaryDir.appendingPathComponent("AuthKey_ZZZZZZZZZZ.p8"),
+            atomically: true,
+            encoding: .utf8
+        )
+        // Explicit APNS_KEY_ID selects the matching AuthKey_ZZZZZZZZZZ.p8 instead of alphabetically-first A
+        try "APNS_KEY_ID=ZZZZZZZZZZ\nAPNS_TEAM_ID=TEAM123456\n".write(
+            to: primaryDir.appendingPathComponent("apns.env"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let discovered = try XCTUnwrap(APNsLocalDirectoryConfig.discover(in: primaryDir))
+        XCTAssertNil(discovered.configurationError)
+        XCTAssertEqual(discovered.keyID, "ZZZZZZZZZZ")
+        XCTAssertEqual(discovered.keyFilename, "AuthKey_ZZZZZZZZZZ.p8")
+        XCTAssertEqual(discovered.privateKeyPEM, keyZ.pemRepresentation.trimmingCharacters(in: .whitespacesAndNewlines))
+
+        // Explicit APNS_KEY_FILE that is missing reports an error instead of falling back to another key
+        try "APNS_KEY_FILE=AuthKey_MISSING123.p8\nAPNS_KEY_ID=MISSING123\nAPNS_TEAM_ID=TEAM123456\n".write(
+            to: primaryDir.appendingPathComponent("apns.env"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let missing = try XCTUnwrap(APNsLocalDirectoryConfig.discover(in: primaryDir))
+        XCTAssertNotNil(missing.configurationError)
+        XCTAssertNil(missing.privateKeyPEM)
+
+        // Metadata-only preferred directory falls through to a usable legacy directory
+        let metaOnlyDir = root.appendingPathComponent("meta-only", isDirectory: true)
+        try FileManager.default.createDirectory(at: metaOnlyDir, withIntermediateDirectories: true)
+        try "APNS_TEAM_ID=TEAM123456\n".write(
+            to: metaOnlyDir.appendingPathComponent("apns.env"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try keyA.pemRepresentation.write(
+            to: legacyDir.appendingPathComponent("AuthKey_AAAAAAAAAA.p8"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let fallback = try XCTUnwrap(APNsLocalDirectoryConfig.discoverFirst(in: [metaOnlyDir, legacyDir]))
+        XCTAssertEqual(fallback.keyID, "AAAAAAAAAA")
+        XCTAssertNotNil(fallback.privateKeyPEM)
+    }
+
+    @MainActor
+    func testAPNsSingleSourceCredentialsAndLegacyMigration() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("chromascan-apns-src-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let dirKey = P256.Signing.PrivateKey()
+        try dirKey.pemRepresentation.write(
+            to: dir.appendingPathComponent("AuthKey_DIRKEY1234.p8"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        // Inaccessible Keychain does NOT silently mix saved metadata with directory PEM
+        let suite = "com.chromascan.apns.kc.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("STALEKEY99", forKey: "companion.apns.keyID")
+
+        let lockedStore = InMemoryAPNsSecretStore(simulatedUnavailableStatus: errSecInteractionNotAllowed)
+        let lockedPrefs = AppPreferences(
+            defaults: defaults,
+            apnsDirectoryURL: dir,
+            secretStore: lockedStore,
+            buildTeamID: "TEAM123456"
+        )
+        XCTAssertEqual(lockedPrefs.apnsKeychainUnavailableStatus, errSecInteractionNotAllowed)
+        XCTAssertNil(lockedPrefs.apnsConfiguration)
+
+        // Legacy plaintext UserDefaults key migrates into secretStore and is purged from UserDefaults
+        let suiteMig = "com.chromascan.apns.mig.\(UUID().uuidString)"
+        let defaultsMig = UserDefaults(suiteName: suiteMig)!
+        defer { defaultsMig.removePersistentDomain(forName: suiteMig) }
+        let legacyKey = P256.Signing.PrivateKey()
+        defaultsMig.set(legacyKey.pemRepresentation, forKey: "companion.apns.privateKeyPEM")
+        defaultsMig.set("MIGKEY1234", forKey: "companion.apns.keyID")
+        defaultsMig.set("TEAM123456", forKey: "companion.apns.teamID")
+
+        let freshStore = InMemoryAPNsSecretStore()
+        let migPrefs = AppPreferences(defaults: defaultsMig, secretStore: freshStore)
+        XCTAssertNil(defaultsMig.string(forKey: "companion.apns.privateKeyPEM"))
+        XCTAssertEqual(migPrefs.apnsConfiguration?.keyID, "MIGKEY1234")
+        XCTAssertEqual(freshStore.loadPrivateKeyPEM(), legacyKey.pemRepresentation.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    func testRegisterPushTokenBackwardsCompatibleDecoding() throws {
+        // Legacy payload without teamID or registrationError
+        let legacyJSON = #"{"type":"registerPushToken","deviceToken":"abc123","environment":"sandbox","enabled":true,"bundleID":"com.example.remote"}"#
+        let decodedLegacy = try JSONDecoder().decode(ClientMessage.self, from: Data(legacyJSON.utf8))
+        XCTAssertEqual(
+            decodedLegacy,
+            .registerPushToken(
+                deviceToken: "abc123",
+                environment: .sandbox,
+                enabled: true,
+                bundleID: "com.example.remote",
+                teamID: nil,
+                registrationError: nil
+            )
+        )
+
+        // Extended payload with teamID and registrationError
+        let extended = ClientMessage.registerPushToken(
+            deviceToken: nil,
+            environment: .sandbox,
+            enabled: true,
+            bundleID: "com.example.remote",
+            teamID: "TEAM123456",
+            registrationError: "no valid \"aps-environment\" entitlement string found"
+        )
+        let data = try JSONEncoder().encode(extended)
+        let decodedExtended = try JSONDecoder().decode(ClientMessage.self, from: data)
+        XCTAssertEqual(decodedExtended, extended)
     }
 }
 

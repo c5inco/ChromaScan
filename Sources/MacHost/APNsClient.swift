@@ -36,7 +36,8 @@ struct APNsConfiguration: Equatable, Sendable {
     }
 }
 
-/// Optional local-machine APNs config discovered from `~/.apns/` (e.g. `AuthKey_<KEYID>.p8` + `apns.env`).
+/// Optional local-machine APNs config discovered from `~/.config/chromascan/apns/` (preferred)
+/// or `~/.apns/` (legacy fallback), e.g. `AuthKey_<KEYID>.p8` + optional `apns.env`.
 /// Keeps private keys strictly outside git while enabling zero-click setup across rebuilds.
 struct APNsLocalDirectoryConfig: Equatable, Sendable {
     let keyID: String?
@@ -44,9 +45,70 @@ struct APNsLocalDirectoryConfig: Equatable, Sendable {
     let bundleID: String?
     let privateKeyPEM: String?
     let keyFilename: String?
+    let sourceDirectoryDisplay: String?
+    let configurationError: String?
+
+    init(
+        keyID: String?,
+        teamID: String?,
+        bundleID: String?,
+        privateKeyPEM: String?,
+        keyFilename: String?,
+        sourceDirectoryDisplay: String? = nil,
+        configurationError: String? = nil
+    ) {
+        self.keyID = keyID
+        self.teamID = teamID
+        self.bundleID = bundleID
+        self.privateKeyPEM = privateKeyPEM
+        self.keyFilename = keyFilename
+        self.sourceDirectoryDisplay = sourceDirectoryDisplay
+        self.configurationError = configurationError
+    }
+
+    static var appConfigDirectoryURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config", isDirectory: true)
+            .appendingPathComponent("chromascan", isDirectory: true)
+            .appendingPathComponent("apns", isDirectory: true)
+    }
+
+    static var legacyDirectoryURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".apns", isDirectory: true)
+    }
 
     static var defaultDirectoryURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".apns", isDirectory: true)
+        appConfigDirectoryURL
+    }
+
+    static var defaultSearchDirectoryURLs: [URL] {
+        [appConfigDirectoryURL, legacyDirectoryURL]
+    }
+
+    static func discoverFirst(in directories: [URL] = defaultSearchDirectoryURLs) -> APNsLocalDirectoryConfig? {
+        var metadataOnlyFallback: APNsLocalDirectoryConfig?
+        for directory in directories {
+            guard let found = discover(in: directory) else { continue }
+            if found.privateKeyPEM != nil || found.configurationError != nil {
+                return found
+            }
+            if metadataOnlyFallback == nil {
+                metadataOnlyFallback = found
+            }
+        }
+        return metadataOnlyFallback
+    }
+
+    static func displayPath(for directoryURL: URL) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
+        let standardized = directoryURL.standardizedFileURL.path
+        if standardized == home {
+            return "~"
+        }
+        if standardized.hasPrefix(home + "/") {
+            return "~" + String(standardized.dropFirst(home.count))
+        }
+        return standardized
     }
 
     static func discover(in directoryURL: URL = defaultDirectoryURL) -> APNsLocalDirectoryConfig? {
@@ -55,6 +117,8 @@ struct APNsLocalDirectoryConfig: Equatable, Sendable {
         guard fm.fileExists(atPath: directoryURL.path, isDirectory: &isDir), isDir.boolValue else {
             return nil
         }
+
+        let displayDir = displayPath(for: directoryURL)
 
         // 1. Parse optional env file (`apns.env` or `config.env`)
         var envValues: [String: String] = [:]
@@ -66,7 +130,12 @@ struct APNsLocalDirectoryConfig: Equatable, Sendable {
             }
         }
 
-        // 2. Find a valid .p8 private key (preferring `AuthKey_*.p8`)
+        let configuredKeyFile = firstNonEmpty(envValues["APNS_KEY_FILE"], envValues["KEY_FILE"])
+        let configuredKeyID = firstNonEmpty(envValues["APNS_KEY_ID"], envValues["KEY_ID"])
+        let teamID = firstNonEmpty(envValues["APNS_TEAM_ID"], envValues["TEAM_ID"])
+        let bundleID = firstNonEmpty(envValues["APNS_BUNDLE_ID"], envValues["BUNDLE_ID"])
+
+        // 2. Discover valid .p8 private keys in directory
         let entries = (try? fm.contentsOfDirectory(
             at: directoryURL,
             includingPropertiesForKeys: nil,
@@ -84,29 +153,79 @@ struct APNsLocalDirectoryConfig: Equatable, Sendable {
         var loadedPEM: String?
         var loadedFilename: String?
         var filenameKeyID: String?
-        for fileURL in p8Files {
-            if let pem = try? String(contentsOf: fileURL, encoding: .utf8),
-               (try? APNsConfiguration.validatePrivateKeyPEM(pem)) != nil {
-                loadedPEM = pem.trimmingCharacters(in: .whitespacesAndNewlines)
-                loadedFilename = fileURL.lastPathComponent
-                filenameKeyID = APNsConfiguration.extractKeyID(fromFilename: fileURL.lastPathComponent)
-                break
+        var configError: String?
+
+        func loadValidKey(at fileURL: URL) -> (pem: String, filename: String, extractedKeyID: String?)? {
+            guard let pem = try? String(contentsOf: fileURL, encoding: .utf8),
+                  (try? APNsConfiguration.validatePrivateKeyPEM(pem)) != nil else {
+                return nil
+            }
+            return (
+                pem: pem.trimmingCharacters(in: .whitespacesAndNewlines),
+                filename: fileURL.lastPathComponent,
+                extractedKeyID: APNsConfiguration.extractKeyID(fromFilename: fileURL.lastPathComponent)
+            )
+        }
+
+        if let configuredKeyFile {
+            let safeName = URL(fileURLWithPath: configuredKeyFile).lastPathComponent
+            if safeName != configuredKeyFile || safeName.isEmpty || safeName == "." || safeName == ".." {
+                configError = "Invalid APNS_KEY_FILE '\(configuredKeyFile)' in \(displayDir)/apns.env."
+            } else {
+                let targetURL = directoryURL.appendingPathComponent(safeName)
+                if let key = loadValidKey(at: targetURL) {
+                    if let configuredKeyID,
+                       let extracted = key.extractedKeyID,
+                       extracted.caseInsensitiveCompare(configuredKeyID) != .orderedSame {
+                        configError = "APNS_KEY_ID (\(configuredKeyID)) does not match \(safeName) in \(displayDir)."
+                    } else {
+                        loadedPEM = key.pem
+                        loadedFilename = key.filename
+                        filenameKeyID = key.extractedKeyID
+                    }
+                } else {
+                    configError = "Configured APNs key \(safeName) is missing or invalid in \(displayDir)."
+                }
+            }
+        } else if let configuredKeyID {
+            let validKeys = p8Files.compactMap { loadValidKey(at: $0) }
+            if let exactMatch = validKeys.first(where: {
+                $0.extractedKeyID?.caseInsensitiveCompare(configuredKeyID) == .orderedSame
+            }) {
+                loadedPEM = exactMatch.pem
+                loadedFilename = exactMatch.filename
+                filenameKeyID = exactMatch.extractedKeyID
+            } else if validKeys.count == 1, let single = validKeys.first, single.extractedKeyID == nil {
+                // Single custom-named .p8 file paired with explicit APNS_KEY_ID
+                loadedPEM = single.pem
+                loadedFilename = single.filename
+            } else if !validKeys.isEmpty {
+                configError = "APNS_KEY_ID (\(configuredKeyID)) does not match any AuthKey_\(configuredKeyID).p8 in \(displayDir)."
+            }
+        } else {
+            for fileURL in p8Files {
+                if let key = loadValidKey(at: fileURL) {
+                    loadedPEM = key.pem
+                    loadedFilename = key.filename
+                    filenameKeyID = key.extractedKeyID
+                    break
+                }
             }
         }
 
-        let keyID = firstNonEmpty(envValues["APNS_KEY_ID"], envValues["KEY_ID"], filenameKeyID)
-        let teamID = firstNonEmpty(envValues["APNS_TEAM_ID"], envValues["TEAM_ID"])
-        let bundleID = firstNonEmpty(envValues["APNS_BUNDLE_ID"], envValues["BUNDLE_ID"])
+        let resolvedKeyID = firstNonEmpty(configuredKeyID, filenameKeyID)
 
-        guard loadedPEM != nil || keyID != nil || teamID != nil || bundleID != nil else {
+        guard loadedPEM != nil || configError != nil || resolvedKeyID != nil || teamID != nil || bundleID != nil else {
             return nil
         }
         return APNsLocalDirectoryConfig(
-            keyID: keyID,
+            keyID: resolvedKeyID,
             teamID: teamID,
             bundleID: bundleID,
             privateKeyPEM: loadedPEM,
-            keyFilename: loadedFilename
+            keyFilename: loadedFilename,
+            sourceDirectoryDisplay: displayDir,
+            configurationError: configError
         )
     }
 
@@ -211,6 +330,23 @@ enum APNsDeliveryResult: Equatable, Sendable {
     case delivered(environment: PushEnvironment)
     case unregistered
     case failed(statusCode: Int, reason: String)
+
+    static func friendlyErrorMessage(statusCode: Int, reason: String) -> String {
+        switch reason {
+        case "InvalidProviderToken":
+            return "Invalid APNs token — check that Key ID and Team ID match your .p8 key."
+        case "DeviceTokenNotForTopic", "TopicDisallowed":
+            return "Bundle ID mismatch — ensure APNs Bundle ID matches your signed iOS app and .p8 key's Team ID."
+        case "BadDeviceToken":
+            return "Invalid device token for APNs sandbox and production — reopen the iPhone app to refresh."
+        case "ExpiredProviderToken":
+            return "APNs provider token expired — verify your Mac's system clock."
+        case "BadCertificateEnvironment":
+            return "APNs environment mismatch between certificate and host."
+        default:
+            return statusCode > 0 ? "HTTP \(statusCode): \(reason)" : reason
+        }
+    }
 }
 
 // MARK: - Transport & Client Protocols
@@ -316,10 +452,24 @@ enum APNsJWTGenerator {
 // MARK: - Direct Mac -> APNs HTTP/2 Push Client
 
 actor APNsClient: APNsPushing {
+    /// Signing credential fingerprint independent of `bundleID`/topic so alert and Live Activity
+    /// pushes using the same key reuse one cached JWT without tripping Apple's token-refresh limits.
+    private struct JWTCredentialFingerprint: Equatable {
+        let keyID: String
+        let teamID: String
+        let privateKeyPEM: String
+
+        init(configuration: APNsConfiguration) {
+            self.keyID = configuration.keyID.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.teamID = configuration.teamID.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.privateKeyPEM = configuration.privateKeyPEM.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
     private struct CachedJWT {
         let token: String
         let issuedAt: Date
-        let configFingerprint: APNsConfiguration
+        let credential: JWTCredentialFingerprint
     }
 
     private let transport: any APNsHTTPTransport
@@ -353,13 +503,35 @@ actor APNsClient: APNsPushing {
             return .failed(statusCode: 0, reason: error.localizedDescription)
         }
 
-        let firstResult = await postToAPNs(
+        var activeJWT = jwt
+        var firstResult = await postToAPNs(
             notification: notification,
             deviceToken: cleanToken,
             environment: preferredEnvironment,
             configuration: configuration,
-            jwt: jwt
+            jwt: activeJWT
         )
+
+        // If the cached JWT expired (e.g. after Mac sleep), invalidate only if unchanged and retry once.
+        if case .failed(let status, let reason) = firstResult,
+           status == 403,
+           reason == "ExpiredProviderToken" {
+            invalidateCachedJWT(ifMatching: activeJWT)
+            do {
+                activeJWT = try validJWT(for: configuration)
+                apnsLog.notice("APNs returned ExpiredProviderToken; retrying once with a freshly signed JWT")
+                firstResult = await postToAPNs(
+                    notification: notification,
+                    deviceToken: cleanToken,
+                    environment: preferredEnvironment,
+                    configuration: configuration,
+                    jwt: activeJWT
+                )
+            } catch {
+                apnsLog.error("APNs JWT re-signing failed: \(error.localizedDescription, privacy: .public)")
+                return .failed(statusCode: 0, reason: error.localizedDescription)
+            }
+        }
 
         // If the iOS build's signing environment differs (e.g. Xcode Release install using sandbox token),
         // retry once against the opposite APNs host automatically.
@@ -373,7 +545,7 @@ actor APNsClient: APNsPushing {
                 deviceToken: cleanToken,
                 environment: fallbackEnv,
                 configuration: configuration,
-                jwt: jwt
+                jwt: activeJWT
             )
         }
 
@@ -399,13 +571,34 @@ actor APNsClient: APNsPushing {
             return .failed(statusCode: 0, reason: error.localizedDescription)
         }
 
-        let firstResult = await postLiveActivityToAPNs(
+        var activeJWT = jwt
+        var firstResult = await postLiveActivityToAPNs(
             payload: payload,
             activityPushToken: cleanToken,
             environment: preferredEnvironment,
             configuration: configuration,
-            jwt: jwt
+            jwt: activeJWT
         )
+
+        if case .failed(let status, let reason) = firstResult,
+           status == 403,
+           reason == "ExpiredProviderToken" {
+            invalidateCachedJWT(ifMatching: activeJWT)
+            do {
+                activeJWT = try validJWT(for: configuration)
+                apnsLog.notice("APNs Live Activity returned ExpiredProviderToken; retrying once with a freshly signed JWT")
+                firstResult = await postLiveActivityToAPNs(
+                    payload: payload,
+                    activityPushToken: cleanToken,
+                    environment: preferredEnvironment,
+                    configuration: configuration,
+                    jwt: activeJWT
+                )
+            } catch {
+                apnsLog.error("APNs JWT re-signing failed: \(error.localizedDescription, privacy: .public)")
+                return .failed(statusCode: 0, reason: error.localizedDescription)
+            }
+        }
 
         if case .failed(let status, let reason) = firstResult,
            status == 400,
@@ -417,7 +610,7 @@ actor APNsClient: APNsPushing {
                 activityPushToken: cleanToken,
                 environment: fallbackEnv,
                 configuration: configuration,
-                jwt: jwt
+                jwt: activeJWT
             )
         }
 
@@ -426,14 +619,21 @@ actor APNsClient: APNsPushing {
 
     private func validJWT(for configuration: APNsConfiguration) throws -> String {
         let now = Date()
+        let credential = JWTCredentialFingerprint(configuration: configuration)
         if let cached = cachedJWT,
-           cached.configFingerprint == configuration,
+           cached.credential == credential,
            now.timeIntervalSince(cached.issuedAt) < jwtLifetime {
             return cached.token
         }
         let fresh = try APNsJWTGenerator.generateToken(configuration: configuration, issuedAt: now)
-        cachedJWT = CachedJWT(token: fresh, issuedAt: now, configFingerprint: configuration)
+        cachedJWT = CachedJWT(token: fresh, issuedAt: now, credential: credential)
         return fresh
+    }
+
+    private func invalidateCachedJWT(ifMatching token: String) {
+        if cachedJWT?.token == token {
+            cachedJWT = nil
+        }
     }
 
     private func postToAPNs(
@@ -496,7 +696,7 @@ actor APNsClient: APNsPushing {
                 return .unregistered
             }
             if status == 403 && reason == "ExpiredProviderToken" {
-                cachedJWT = nil
+                invalidateCachedJWT(ifMatching: jwt)
             }
             apnsLog.error("APNs push failed (HTTP \(status)): \(reason, privacy: .public)")
             return .failed(statusCode: status, reason: reason)
@@ -576,7 +776,7 @@ actor APNsClient: APNsPushing {
                 return .unregistered
             }
             if status == 403 && reason == "ExpiredProviderToken" {
-                cachedJWT = nil
+                invalidateCachedJWT(ifMatching: jwt)
             }
             apnsLog.error("APNs Live Activity push failed (HTTP \(status)): \(reason, privacy: .public)")
             return .failed(statusCode: status, reason: reason)

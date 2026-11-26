@@ -1,0 +1,11 @@
+// Shared default build settings for ChromaScan.
+// Do NOT commit your personal Apple Team ID here.
+// Copy Config/Local.xcconfig.example to Config/Local.xcconfig (or run ./scripts/setup-signing.sh)
+// to configure your own Team ID, Bundle ID prefix, and optional APNs entitlements.
+
+CHROMASCAN_TEAM_ID =
+CHROMASCAN_BUNDLE_ID_PREFIX = com.chromascan
+CHROMASCAN_MAC_CODE_SIGN_IDENTITY = -
+CHROMASCAN_IOS_ENTITLEMENTS =
+
+#include? "Local.xcconfig"

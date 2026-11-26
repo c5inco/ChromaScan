@@ -127,7 +127,14 @@ enum ClientMessage: Equatable, Sendable {
     case cancel
     case requestTile(requestID: UInt32, normalizedRect: NormalizedCropRect, maxPixelWidth: Int)
     case requestPhotosCopy(requestID: UInt32, format: OutputFormat, quality: Double)
-    case registerPushToken(deviceToken: String?, environment: PushEnvironment, enabled: Bool, bundleID: String? = nil)
+    case registerPushToken(
+        deviceToken: String?,
+        environment: PushEnvironment,
+        enabled: Bool,
+        bundleID: String? = nil,
+        teamID: String? = nil,
+        registrationError: String? = nil
+    )
     case registerLiveActivityToken(activityPushToken: String?, environment: PushEnvironment, bundleID: String? = nil)
     case ping
 }
@@ -156,6 +163,8 @@ extension ClientMessage: Codable {
         case environment
         case enabled
         case bundleID
+        case teamID
+        case registrationError
     }
 
     init(from decoder: Decoder) throws {
@@ -212,7 +221,9 @@ extension ClientMessage: Codable {
                 deviceToken: try c.decodeIfPresent(String.self, forKey: .deviceToken),
                 environment: try c.decode(PushEnvironment.self, forKey: .environment),
                 enabled: try c.decode(Bool.self, forKey: .enabled),
-                bundleID: try c.decodeIfPresent(String.self, forKey: .bundleID)
+                bundleID: try c.decodeIfPresent(String.self, forKey: .bundleID),
+                teamID: try c.decodeIfPresent(String.self, forKey: .teamID),
+                registrationError: try c.decodeIfPresent(String.self, forKey: .registrationError)
             )
         case "registerLiveActivityToken":
             self = .registerLiveActivityToken(
@@ -275,12 +286,14 @@ extension ClientMessage: Codable {
             try c.encode(requestID, forKey: .requestID)
             try c.encode(format, forKey: .format)
             try c.encode(quality, forKey: .quality)
-        case .registerPushToken(let deviceToken, let environment, let enabled, let bundleID):
+        case .registerPushToken(let deviceToken, let environment, let enabled, let bundleID, let teamID, let registrationError):
             try c.encode("registerPushToken", forKey: .type)
             try c.encodeIfPresent(deviceToken, forKey: .deviceToken)
             try c.encode(environment, forKey: .environment)
             try c.encode(enabled, forKey: .enabled)
             try c.encodeIfPresent(bundleID, forKey: .bundleID)
+            try c.encodeIfPresent(teamID, forKey: .teamID)
+            try c.encodeIfPresent(registrationError, forKey: .registrationError)
         case .registerLiveActivityToken(let activityPushToken, let environment, let bundleID):
             try c.encode("registerLiveActivityToken", forKey: .type)
             try c.encodeIfPresent(activityPushToken, forKey: .activityPushToken)

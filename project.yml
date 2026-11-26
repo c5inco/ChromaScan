@@ -7,6 +7,10 @@ options:
   xcodeVersion: "16.0"
   createIntermediateGroups: true
 
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -29,7 +33,7 @@ targets:
       properties:
         CFBundleName: ChromaScan
         CFBundleDisplayName: ChromaScan
-        CFBundleIdentifier: com.chromascan.app
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
         CFBundleVersion: "1"
         CFBundleShortVersionString: "1.0.0"
         CFBundlePackageType: APPL
@@ -43,12 +47,15 @@ targets:
           - "_chromascan._tcp"
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+        ChromaScanTeamID: $(CHROMASCAN_TEAM_ID)
+        ChromaScanCompanionBundleID: $(CHROMASCAN_BUNDLE_ID_PREFIX).remote
     settings:
       base:
         MACOSX_DEPLOYMENT_TARGET: "14.0"
         ENABLE_HARDENED_RUNTIME: NO
-        CODE_SIGN_IDENTITY: "-"
-        PRODUCT_BUNDLE_IDENTIFIER: com.chromascan.app
+        DEVELOPMENT_TEAM: $(CHROMASCAN_TEAM_ID)
+        CODE_SIGN_IDENTITY: $(CHROMASCAN_MAC_CODE_SIGN_IDENTITY)
+        PRODUCT_BUNDLE_IDENTIFIER: $(CHROMASCAN_BUNDLE_ID_PREFIX).app
         INFOPLIST_FILE: Resources/Info.plist
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -90,14 +97,16 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+        ChromaScanTeamID: $(CHROMASCAN_TEAM_ID)
     settings:
       base:
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
-        DEVELOPMENT_TEAM: FXB7YX3ZD4
-        PRODUCT_BUNDLE_IDENTIFIER: com.chromascan.remote
+        DEVELOPMENT_TEAM: $(CHROMASCAN_TEAM_ID)
+        CODE_SIGN_IDENTITY: Apple Development
+        PRODUCT_BUNDLE_IDENTIFIER: $(CHROMASCAN_BUNDLE_ID_PREFIX).remote
         PRODUCT_NAME: ChromaScanRemote
         INFOPLIST_FILE: Resources/iOSInfo.plist
-        CODE_SIGN_ENTITLEMENTS: Resources/ChromaScanRemote.entitlements
+        CODE_SIGN_ENTITLEMENTS: $(CHROMASCAN_IOS_ENTITLEMENTS)
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -123,8 +132,9 @@ targets:
     settings:
       base:
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
-        DEVELOPMENT_TEAM: FXB7YX3ZD4
-        PRODUCT_BUNDLE_IDENTIFIER: com.chromascan.remote.widgets
+        DEVELOPMENT_TEAM: $(CHROMASCAN_TEAM_ID)
+        CODE_SIGN_IDENTITY: Apple Development
+        PRODUCT_BUNDLE_IDENTIFIER: $(CHROMASCAN_BUNDLE_ID_PREFIX).remote.widgets
         PRODUCT_NAME: ChromaScanWidgets
         INFOPLIST_FILE: Resources/WidgetsInfo.plist
         TARGETED_DEVICE_FAMILY: "1,2"
@@ -142,7 +152,9 @@ targets:
     settings:
       base:
         MACOSX_DEPLOYMENT_TARGET: "14.0"
-        CODE_SIGN_IDENTITY: "-"
+        DEVELOPMENT_TEAM: $(CHROMASCAN_TEAM_ID)
+        CODE_SIGN_IDENTITY: $(CHROMASCAN_MAC_CODE_SIGN_IDENTITY)
+        PRODUCT_BUNDLE_IDENTIFIER: $(CHROMASCAN_BUNDLE_ID_PREFIX).tests
         GENERATE_INFOPLIST_FILE: YES
 
   ChromaScanRemoteTests:
@@ -155,5 +167,6 @@ targets:
     settings:
       base:
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
-        DEVELOPMENT_TEAM: FXB7YX3ZD4
+        DEVELOPMENT_TEAM: $(CHROMASCAN_TEAM_ID)
+        PRODUCT_BUNDLE_IDENTIFIER: $(CHROMASCAN_BUNDLE_ID_PREFIX).remote.tests
         GENERATE_INFOPLIST_FILE: YES

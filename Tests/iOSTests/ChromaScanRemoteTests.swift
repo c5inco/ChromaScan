@@ -296,11 +296,21 @@ final class ChromaScanRemoteTests: XCTestCase {
             return false
         }
 
-        // Register APNs token -> synced to Mac host
+        // Registration failure surfaces on store and syncs to Mac host
+        store.updateAPNsRegistrationError("no valid \"aps-environment\" entitlement string found")
+        try await waitUntil(timeout: 2.0) {
+            mockHost.lastPushRegistrationError == "no valid \"aps-environment\" entitlement string found"
+        }
+        XCTAssertEqual(store.apnsRegistrationError, "no valid \"aps-environment\" entitlement string found")
+
+        // Register APNs token -> clears registration error and syncs to Mac host
         store.updateAPNsDeviceToken("0123456789abcdef")
         try await waitUntil(timeout: 2.0) {
-            mockHost.lastRegisteredPushToken == "0123456789abcdef" && mockHost.lastPushEnabled == true
+            mockHost.lastRegisteredPushToken == "0123456789abcdef"
+                && mockHost.lastPushEnabled == true
+                && mockHost.lastPushRegistrationError == nil
         }
+        XCTAssertNil(store.apnsRegistrationError)
         XCTAssertTrue(store.isDirectAPNsActive)
         let remoteRegCount = await mockNotifier.remoteRegisterCount
         XCTAssertGreaterThanOrEqual(remoteRegCount, 1)
@@ -342,6 +352,14 @@ final class ChromaScanRemoteTests: XCTestCase {
         let postedInForeground = await mockNotifier.postedPayloads
         XCTAssertEqual(postedInForeground.count, 1)
         XCTAssertEqual(postedInForeground.first?.filename, "fg-scan-002.tiff")
+
+        // Registration failure after a valid token clears active direct push and syncs error to host
+        store.updateAPNsRegistrationError("no valid \"aps-environment\" entitlement string found")
+        try await waitUntil(timeout: 2.0) {
+            mockHost.lastPushRegistrationError == "no valid \"aps-environment\" entitlement string found"
+                && mockHost.lastRegisteredPushToken == nil
+        }
+        XCTAssertFalse(store.isDirectAPNsActive)
 
         // Turning off notifications notifies Mac host to disable push for this device
         store.setNotifyOnScanComplete(false)
@@ -487,6 +505,7 @@ private final class LoopbackMockMacHost {
     private(set) var lastRegisteredPushToken: String?
     private(set) var lastPushEnabled: Bool?
     private(set) var lastRegisteredLiveActivityToken: String?
+    private(set) var lastPushRegistrationError: String?
 
     init(pin: String, apnsConfigured: Bool = false) throws {
         self.pin = pin
@@ -624,9 +643,10 @@ private final class LoopbackMockMacHost {
             currentStatusText = "Scan cancelled"
             sendText(.snapshot(snapshot: makeSnapshot()), on: conn)
 
-        case .registerPushToken(let deviceToken, _, let enabled, _):
+        case .registerPushToken(let deviceToken, _, let enabled, _, _, let registrationError):
             lastRegisteredPushToken = deviceToken
             lastPushEnabled = enabled
+            lastPushRegistrationError = registrationError
 
         case .registerLiveActivityToken(let activityPushToken, _, _):
             lastRegisteredLiveActivityToken = activityPushToken

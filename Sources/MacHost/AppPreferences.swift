@@ -8,7 +8,10 @@ struct PairedCompanionDevice: Codable, Equatable, Identifiable, Sendable {
     var lastSeenAt: Date
     var apnsDeviceToken: String?
     var apnsEnvironment: PushEnvironment?
+    var apnsEnvironmentVerified: Bool
     var apnsBundleID: String?
+    var apnsTeamID: String?
+    var apnsRegistrationError: String?
     var pushNotificationsEnabled: Bool
 
     var id: String { token }
@@ -20,7 +23,10 @@ struct PairedCompanionDevice: Codable, Equatable, Identifiable, Sendable {
         lastSeenAt: Date,
         apnsDeviceToken: String? = nil,
         apnsEnvironment: PushEnvironment? = nil,
+        apnsEnvironmentVerified: Bool = false,
         apnsBundleID: String? = nil,
+        apnsTeamID: String? = nil,
+        apnsRegistrationError: String? = nil,
         pushNotificationsEnabled: Bool = true
     ) {
         self.token = token
@@ -29,7 +35,10 @@ struct PairedCompanionDevice: Codable, Equatable, Identifiable, Sendable {
         self.lastSeenAt = lastSeenAt
         self.apnsDeviceToken = apnsDeviceToken
         self.apnsEnvironment = apnsEnvironment
+        self.apnsEnvironmentVerified = apnsEnvironmentVerified
         self.apnsBundleID = apnsBundleID
+        self.apnsTeamID = apnsTeamID
+        self.apnsRegistrationError = apnsRegistrationError
         self.pushNotificationsEnabled = pushNotificationsEnabled
     }
 
@@ -40,7 +49,10 @@ struct PairedCompanionDevice: Codable, Equatable, Identifiable, Sendable {
         case lastSeenAt
         case apnsDeviceToken
         case apnsEnvironment
+        case apnsEnvironmentVerified
         case apnsBundleID
+        case apnsTeamID
+        case apnsRegistrationError
         case pushNotificationsEnabled
     }
 
@@ -52,28 +64,213 @@ struct PairedCompanionDevice: Codable, Equatable, Identifiable, Sendable {
         self.lastSeenAt = try c.decode(Date.self, forKey: .lastSeenAt)
         self.apnsDeviceToken = try c.decodeIfPresent(String.self, forKey: .apnsDeviceToken)
         self.apnsEnvironment = try c.decodeIfPresent(PushEnvironment.self, forKey: .apnsEnvironment)
+        self.apnsEnvironmentVerified = try c.decodeIfPresent(Bool.self, forKey: .apnsEnvironmentVerified) ?? false
         self.apnsBundleID = try c.decodeIfPresent(String.self, forKey: .apnsBundleID)
+        self.apnsTeamID = try c.decodeIfPresent(String.self, forKey: .apnsTeamID)
+        self.apnsRegistrationError = try c.decodeIfPresent(String.self, forKey: .apnsRegistrationError)
         self.pushNotificationsEnabled = try c.decodeIfPresent(Bool.self, forKey: .pushNotificationsEnabled) ?? true
+    }
+}
+
+enum APNsSecretLoadResult: Equatable, Sendable {
+    case found(String)
+    case notFound
+    case unavailable(OSStatus)
+}
+
+protocol APNsSecretStoring: Sendable {
+    func loadPrivateKeyResult() -> APNsSecretLoadResult
+    @discardableResult
+    func savePrivateKeyPEM(_ pem: String?) -> Bool
+}
+
+extension APNsSecretStoring {
+    func loadPrivateKeyPEM() -> String? {
+        if case .found(let pem) = loadPrivateKeyResult() {
+            return pem
+        }
+        return nil
+    }
+}
+
+struct KeychainAPNsSecretStore: APNsSecretStoring {
+    private let service: String
+    private let account: String
+
+    init(
+        service: String = "com.chromascan.apns.authkey",
+        account: String = "default"
+    ) {
+        self.service = service
+        self.account = account
+    }
+
+    func loadPrivateKeyResult() -> APNsSecretLoadResult {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecSuccess,
+           let data = result as? Data,
+           let pem = String(data: data, encoding: .utf8),
+           !pem.isEmpty {
+            return .found(pem)
+        }
+        if status == errSecItemNotFound {
+            return .notFound
+        }
+        return .unavailable(status)
+    }
+
+    @discardableResult
+    func savePrivateKeyPEM(_ pem: String?) -> Bool {
+        let clean = pem?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        guard let clean, !clean.isEmpty else {
+            let status = SecItemDelete(baseQuery as CFDictionary)
+            return status == errSecSuccess || status == errSecItemNotFound
+        }
+        guard let data = clean.data(using: .utf8) else {
+            return false
+        }
+
+        // Update existing item in-place first so a failed write never erases a working key.
+        let updateAttributes: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+        ]
+        let updateStatus = SecItemUpdate(baseQuery as CFDictionary, updateAttributes as CFDictionary)
+        if updateStatus == errSecSuccess {
+            return true
+        }
+        if updateStatus == errSecItemNotFound {
+            var addQuery = baseQuery
+            addQuery[kSecValueData as String] = data
+            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+            return SecItemAdd(addQuery as CFDictionary, nil) == errSecSuccess
+        }
+        return false
+    }
+}
+
+final class InMemoryAPNsSecretStore: APNsSecretStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedPEM: String?
+    private var simulatedUnavailableStatus: OSStatus?
+
+    init(initialPEM: String? = nil, simulatedUnavailableStatus: OSStatus? = nil) {
+        self.storedPEM = initialPEM
+        self.simulatedUnavailableStatus = simulatedUnavailableStatus
+    }
+
+    func loadPrivateKeyResult() -> APNsSecretLoadResult {
+        lock.lock()
+        defer { lock.unlock() }
+        if let status = simulatedUnavailableStatus {
+            return .unavailable(status)
+        }
+        if let storedPEM, !storedPEM.isEmpty {
+            return .found(storedPEM)
+        }
+        return .notFound
+    }
+
+    @discardableResult
+    func savePrivateKeyPEM(_ pem: String?) -> Bool {
+        let clean = pem?.trimmingCharacters(in: .whitespacesAndNewlines)
+        lock.lock()
+        defer { lock.unlock() }
+        if simulatedUnavailableStatus != nil {
+            return false
+        }
+        storedPEM = (clean?.isEmpty == false) ? clean : nil
+        return true
     }
 }
 
 @MainActor
 final class AppPreferences {
     private let defaults: UserDefaults
-    private let apnsDirectoryURL: URL?
+    private let apnsSearchDirectoryURLs: [URL]
+    private let secretStore: any APNsSecretStoring
+    private let buildTeamID: String?
+    private let buildCompanionBundleID: String?
+    private var cachedLocalAPNsConfig: APNsLocalDirectoryConfig?
 
     init(
         defaults: UserDefaults = .standard,
-        apnsDirectoryURL: URL? = nil
+        apnsDirectoryURL: URL? = nil,
+        apnsSearchDirectoryURLs: [URL]? = nil,
+        secretStore: (any APNsSecretStoring)? = nil,
+        buildTeamID: String? = nil,
+        buildCompanionBundleID: String? = nil
     ) {
         self.defaults = defaults
-        if let apnsDirectoryURL {
-            self.apnsDirectoryURL = apnsDirectoryURL
-        } else if defaults === UserDefaults.standard {
-            self.apnsDirectoryURL = APNsLocalDirectoryConfig.defaultDirectoryURL
+        let isStandard = (defaults === UserDefaults.standard)
+        if let apnsSearchDirectoryURLs {
+            self.apnsSearchDirectoryURLs = apnsSearchDirectoryURLs
+        } else if let apnsDirectoryURL {
+            self.apnsSearchDirectoryURLs = [apnsDirectoryURL]
+        } else if isStandard {
+            self.apnsSearchDirectoryURLs = APNsLocalDirectoryConfig.defaultSearchDirectoryURLs
         } else {
-            self.apnsDirectoryURL = nil
+            self.apnsSearchDirectoryURLs = []
         }
+
+        if let secretStore {
+            self.secretStore = secretStore
+        } else if isStandard {
+            self.secretStore = KeychainAPNsSecretStore()
+        } else {
+            self.secretStore = InMemoryAPNsSecretStore()
+        }
+
+        self.buildTeamID = Self.sanitizedBuildSetting(
+            buildTeamID ?? (isStandard ? Bundle.main.object(forInfoDictionaryKey: "ChromaScanTeamID") as? String : nil)
+        )
+        self.buildCompanionBundleID = Self.sanitizedBuildSetting(
+            buildCompanionBundleID ?? (isStandard ? Bundle.main.object(forInfoDictionaryKey: "ChromaScanCompanionBundleID") as? String : nil)
+        )
+        self.cachedLocalAPNsConfig = APNsLocalDirectoryConfig.discoverFirst(in: self.apnsSearchDirectoryURLs)
+        migrateLegacyUserDefaultsAPNsKeyIfNeeded()
+    }
+
+    private func migrateLegacyUserDefaultsAPNsKeyIfNeeded() {
+        guard let legacyPEM = defaults.string(forKey: Key.apnsPrivateKeyFallback)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !legacyPEM.isEmpty else {
+            return
+        }
+        switch secretStore.loadPrivateKeyResult() {
+        case .found:
+            // Keychain already holds a key; safe to purge legacy plaintext copy.
+            defaults.removeObject(forKey: Key.apnsPrivateKeyFallback)
+        case .notFound:
+            if secretStore.savePrivateKeyPEM(legacyPEM) {
+                defaults.removeObject(forKey: Key.apnsPrivateKeyFallback)
+            }
+        case .unavailable:
+            // Leave legacy value untouched until Keychain becomes accessible.
+            break
+        }
+    }
+
+    private static func sanitizedBuildSetting(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty,
+              !trimmed.contains("$(") else {
+            return nil
+        }
+        return trimmed
     }
 
     private enum Key {
@@ -297,19 +494,47 @@ final class AppPreferences {
         deviceToken: String?,
         environment: PushEnvironment,
         enabled: Bool,
-        bundleID: String? = nil
+        bundleID: String? = nil,
+        teamID: String? = nil,
+        registrationError: String? = nil
     ) {
         var list = pairedDevices
         guard let idx = list.firstIndex(where: { $0.token == authToken }) else { return }
         list[idx].pushNotificationsEnabled = enabled
-        list[idx].apnsEnvironment = environment
         if let bundleID, !bundleID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             list[idx].apnsBundleID = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        if let deviceToken, !deviceToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            list[idx].apnsDeviceToken = deviceToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        } else if !enabled {
+        if let teamID = Self.sanitizedBuildSetting(teamID) {
+            list[idx].apnsTeamID = teamID
+        }
+
+        let cleanToken = deviceToken?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanError = registrationError?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if !enabled {
             list[idx].apnsDeviceToken = nil
+            list[idx].apnsEnvironment = environment
+            list[idx].apnsEnvironmentVerified = false
+            list[idx].apnsRegistrationError = nil
+        } else if let cleanError, !cleanError.isEmpty {
+            list[idx].apnsDeviceToken = nil
+            list[idx].apnsEnvironment = environment
+            list[idx].apnsEnvironmentVerified = false
+            list[idx].apnsRegistrationError = cleanError
+        } else if let cleanToken, !cleanToken.isEmpty {
+            let tokenChanged = (list[idx].apnsDeviceToken != cleanToken)
+            list[idx].apnsDeviceToken = cleanToken
+            if tokenChanged || !list[idx].apnsEnvironmentVerified {
+                list[idx].apnsEnvironment = environment
+                if tokenChanged {
+                    list[idx].apnsEnvironmentVerified = false
+                }
+            }
+            list[idx].apnsRegistrationError = nil
+        } else {
+            if !list[idx].apnsEnvironmentVerified {
+                list[idx].apnsEnvironment = environment
+            }
         }
         list[idx].lastSeenAt = Date()
         pairedDevices = list
@@ -319,8 +544,9 @@ final class AppPreferences {
         var list = pairedDevices
         var changed = false
         for idx in list.indices where list[idx].apnsDeviceToken == apnsDeviceToken {
-            if list[idx].apnsEnvironment != environment {
+            if list[idx].apnsEnvironment != environment || !list[idx].apnsEnvironmentVerified {
                 list[idx].apnsEnvironment = environment
+                list[idx].apnsEnvironmentVerified = true
                 changed = true
             }
         }
@@ -334,6 +560,7 @@ final class AppPreferences {
         var changed = false
         for idx in list.indices where list[idx].apnsDeviceToken == apnsDeviceToken {
             list[idx].apnsDeviceToken = nil
+            list[idx].apnsEnvironmentVerified = false
             changed = true
         }
         if changed {
@@ -351,12 +578,51 @@ final class AppPreferences {
     // MARK: - APNs Push Configuration (Direct Mac -> APNs)
 
     var discoveredLocalAPNsConfig: APNsLocalDirectoryConfig? {
-        guard let apnsDirectoryURL else { return nil }
-        return APNsLocalDirectoryConfig.discover(in: apnsDirectoryURL)
+        cachedLocalAPNsConfig
+    }
+
+    func refreshLocalAPNsConfig() {
+        cachedLocalAPNsConfig = APNsLocalDirectoryConfig.discoverFirst(in: apnsSearchDirectoryURLs)
     }
 
     var inferredDeviceBundleID: String? {
-        pairedDevices.compactMap(\.apnsBundleID).first(where: { !$0.isEmpty })
+        pushEligibleDevices.compactMap(\.apnsBundleID).first(where: { !$0.isEmpty })
+            ?? pairedDevices.filter(\.pushNotificationsEnabled).compactMap(\.apnsBundleID).first(where: { !$0.isEmpty })
+    }
+
+    /// Returns a paired device Team ID only when push-enabled devices with a reported team
+    /// agree unambiguously on one Team ID (never letting an opted-out or mismatched device hijack the issuer).
+    var unambiguousDeviceTeamID: String? {
+        let candidates = Set(
+            pairedDevices
+                .filter { $0.pushNotificationsEnabled && ($0.apnsDeviceToken?.isEmpty == false) }
+                .compactMap(\.apnsTeamID)
+                .filter { !$0.isEmpty }
+        )
+        return candidates.count == 1 ? candidates.first : nil
+    }
+
+    var mismatchedTeamDeviceNames: [String] {
+        guard let activeTeam = apnsConfiguration?.teamID, !activeTeam.isEmpty else { return [] }
+        return pushEligibleDevices.compactMap { device in
+            guard let devTeam = device.apnsTeamID, !devTeam.isEmpty else { return nil }
+            return devTeam.caseInsensitiveCompare(activeTeam) == .orderedSame ? nil : device.clientName
+        }
+    }
+
+    var latestDevicePushRegistrationError: String? {
+        pairedDevices
+            .filter { $0.pushNotificationsEnabled && ($0.apnsDeviceToken?.isEmpty ?? true) }
+            .sorted { $0.lastSeenAt > $1.lastSeenAt }
+            .compactMap(\.apnsRegistrationError)
+            .first(where: { !$0.isEmpty })
+    }
+
+    var apnsKeychainUnavailableStatus: OSStatus? {
+        if case .unavailable(let status) = secretStore.loadPrivateKeyResult() {
+            return status
+        }
+        return nil
     }
 
     var apnsKeyID: String {
@@ -379,108 +645,131 @@ final class AppPreferences {
             if let deviceBundle = inferredDeviceBundleID {
                 return deviceBundle
             }
+            if let buildBundle = buildCompanionBundleID {
+                return buildBundle
+            }
             return Self.defaultIOSBundleID
         }
         set { defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: Key.apnsBundleID) }
     }
 
+    /// Resolves Key ID from the same source as the active private key (never mixing Keychain
+    /// metadata with a directory `.p8` file).
     var effectiveAPNsKeyID: String {
-        let stored = apnsKeyID.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !stored.isEmpty { return stored }
-        return discoveredLocalAPNsConfig?.keyID ?? ""
+        switch secretStore.loadPrivateKeyResult() {
+        case .found:
+            return apnsKeyID.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .unavailable:
+            return apnsKeyID.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .notFound:
+            if let dirKeyID = discoveredLocalAPNsConfig?.keyID, !dirKeyID.isEmpty {
+                return dirKeyID
+            }
+            return apnsKeyID.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
     }
 
+    /// Issuer Team ID precedence:
+    /// 1. Explicit Team ID configured with the active key source (Keychain prefs or directory apns.env)
+    /// 2. Local signed build's Team ID (`Info.plist` `ChromaScanTeamID`)
+    /// 3. Unambiguous paired push-eligible device Team ID
     var effectiveAPNsTeamID: String {
-        let stored = apnsTeamID.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !stored.isEmpty { return stored }
-        return discoveredLocalAPNsConfig?.teamID ?? ""
+        switch secretStore.loadPrivateKeyResult() {
+        case .found, .unavailable:
+            let stored = apnsTeamID.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !stored.isEmpty { return stored }
+            if let buildTeamID { return buildTeamID }
+            return unambiguousDeviceTeamID ?? ""
+        case .notFound:
+            if let discovered = discoveredLocalAPNsConfig?.teamID, !discovered.isEmpty {
+                return discovered
+            }
+            if let buildTeamID { return buildTeamID }
+            if let deviceTeam = unambiguousDeviceTeamID {
+                return deviceTeam
+            }
+            return apnsTeamID.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
     }
 
     var effectiveAPNsPrivateKeyPEM: String? {
-        if let stored = apnsPrivateKeyPEM, !stored.isEmpty {
+        switch secretStore.loadPrivateKeyResult() {
+        case .found(let stored):
             return stored
+        case .unavailable:
+            return nil
+        case .notFound:
+            return discoveredLocalAPNsConfig?.privateKeyPEM
         }
-        return discoveredLocalAPNsConfig?.privateKeyPEM
     }
 
     var isUsingLocalAPNsDirectoryKey: Bool {
-        apnsPrivateKeyPEM == nil && discoveredLocalAPNsConfig?.privateKeyPEM != nil
+        if case .notFound = secretStore.loadPrivateKeyResult() {
+            return discoveredLocalAPNsConfig?.privateKeyPEM != nil
+        }
+        return false
     }
 
     var apnsPrivateKeyPEM: String? {
         get {
-            if defaults === UserDefaults.standard {
-                let query: [String: Any] = [
-                    kSecClass as String: kSecClassGenericPassword,
-                    kSecAttrService as String: Self.apnsKeychainService,
-                    kSecAttrAccount as String: Self.apnsKeychainAccount,
-                    kSecReturnData as String: true,
-                    kSecMatchLimit as String: kSecMatchLimitOne
-                ]
-                var result: AnyObject?
-                let status = SecItemCopyMatching(query as CFDictionary, &result)
-                if status == errSecSuccess,
-                   let data = result as? Data,
-                   let pem = String(data: data, encoding: .utf8),
-                   !pem.isEmpty {
-                    return pem
-                }
-            }
-            let fallback = defaults.string(forKey: Key.apnsPrivateKeyFallback)
-            return (fallback?.isEmpty == false) ? fallback : nil
+            secretStore.loadPrivateKeyPEM()
         }
         set {
-            let clean = newValue?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if defaults === UserDefaults.standard {
-                let deleteQuery: [String: Any] = [
-                    kSecClass as String: kSecClassGenericPassword,
-                    kSecAttrService as String: Self.apnsKeychainService,
-                    kSecAttrAccount as String: Self.apnsKeychainAccount
-                ]
-                SecItemDelete(deleteQuery as CFDictionary)
-                if let clean, !clean.isEmpty, let data = clean.data(using: .utf8) {
-                    var addQuery = deleteQuery
-                    addQuery[kSecValueData as String] = data
-                    addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-                    let status = SecItemAdd(addQuery as CFDictionary, nil)
-                    if status == errSecSuccess {
-                        defaults.removeObject(forKey: Key.apnsPrivateKeyFallback)
-                        return
-                    }
-                } else {
-                    defaults.removeObject(forKey: Key.apnsPrivateKeyFallback)
-                    return
-                }
-            }
-
-            if let clean, !clean.isEmpty {
-                defaults.set(clean, forKey: Key.apnsPrivateKeyFallback)
-            } else {
-                defaults.removeObject(forKey: Key.apnsPrivateKeyFallback)
-            }
+            _ = saveAPNsPrivateKeyPEM(newValue)
         }
     }
 
+    @discardableResult
+    func saveAPNsPrivateKeyPEM(_ pem: String?) -> Bool {
+        let saved = secretStore.savePrivateKeyPEM(pem)
+        if saved {
+            defaults.removeObject(forKey: Key.apnsPrivateKeyFallback)
+        }
+        return saved
+    }
+
     var apnsConfiguration: APNsConfiguration? {
-        guard let pem = effectiveAPNsPrivateKeyPEM, !pem.isEmpty else { return nil }
-        let config = APNsConfiguration(
-            keyID: effectiveAPNsKeyID,
-            teamID: effectiveAPNsTeamID,
-            bundleID: apnsBundleID,
-            privateKeyPEM: pem
-        )
-        return config.isComplete ? config : nil
+        switch secretStore.loadPrivateKeyResult() {
+        case .found(let pem):
+            let config = APNsConfiguration(
+                keyID: apnsKeyID.trimmingCharacters(in: .whitespacesAndNewlines),
+                teamID: effectiveAPNsTeamID,
+                bundleID: apnsBundleID,
+                privateKeyPEM: pem
+            )
+            return config.isComplete ? config : nil
+        case .unavailable:
+            return nil
+        case .notFound:
+            guard let local = discoveredLocalAPNsConfig,
+                  local.configurationError == nil,
+                  let pem = local.privateKeyPEM, !pem.isEmpty,
+                  let keyID = local.keyID, !keyID.isEmpty else {
+                return nil
+            }
+            let config = APNsConfiguration(
+                keyID: keyID,
+                teamID: effectiveAPNsTeamID,
+                bundleID: apnsBundleID,
+                privateKeyPEM: pem
+            )
+            return config.isComplete ? config : nil
+        }
     }
 
     var isAPNsConfigured: Bool {
         apnsConfiguration != nil
     }
 
-    func clearAPNsConfiguration() {
-        apnsKeyID = ""
-        apnsTeamID = ""
-        apnsBundleID = ""
-        apnsPrivateKeyPEM = nil
+    @discardableResult
+    func clearAPNsConfiguration() -> Bool {
+        let clearedKey = saveAPNsPrivateKeyPEM(nil)
+        if clearedKey {
+            apnsKeyID = ""
+            apnsTeamID = ""
+            apnsBundleID = ""
+        }
+        return clearedKey
     }
 }
 

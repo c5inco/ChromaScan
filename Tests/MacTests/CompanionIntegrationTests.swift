@@ -193,7 +193,7 @@ final class CompanionIntegrationTests: XCTestCase {
         prefs.baseFilename = "push-test-001"
         prefs.resolution = 300
         prefs.apnsKeyID = "9A8B7C6D5E"
-        prefs.apnsTeamID = "FXB7YX3ZD4"
+        prefs.apnsTeamID = "TEAM123456"
         prefs.apnsBundleID = "com.chromascan.remote"
         prefs.apnsPrivateKeyPEM = testKey.pemRepresentation
 
@@ -294,7 +294,7 @@ final class CompanionIntegrationTests: XCTestCase {
         prefs.baseFilename = "live-001"
         prefs.resolution = 300
         prefs.apnsKeyID = "9A8B7C6D5E"
-        prefs.apnsTeamID = "FXB7YX3ZD4"
+        prefs.apnsTeamID = "TEAM123456"
         prefs.apnsBundleID = "com.chromascan.remote"
         prefs.apnsPrivateKeyPEM = testKey.pemRepresentation
 

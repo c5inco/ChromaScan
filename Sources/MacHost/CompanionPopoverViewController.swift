@@ -172,6 +172,16 @@ final class CompanionPopoverViewController: NSViewController {
         refreshUI()
     }
 
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        let wasConfigured = preferences.isAPNsConfigured
+        preferences.refreshLocalAPNsConfig()
+        if preferences.isAPNsConfigured != wasConfigured {
+            server.notifyAPNsConfigurationChanged()
+        }
+        refreshUI()
+    }
+
     func refreshUI() {
         guard isViewLoaded else { return }
         enableSwitch.state = preferences.companionServerEnabled ? .on : .off
@@ -231,19 +241,51 @@ final class CompanionPopoverViewController: NSViewController {
         pairedCountLabel.stringValue = pairedCount == 1 ? "1 paired device" : "\(pairedCount) paired devices"
         revokeButton.isEnabled = pairedCount > 0
 
-        let pushReadyCount = preferences.pushEligibleDevices.count
-        if let activeConfig = preferences.apnsConfiguration {
-            let readyText = pushReadyCount == 1 ? "1 push-ready iPhone" : "\(pushReadyCount) push-ready iPhones"
-            let sourceSuffix = preferences.isUsingLocalAPNsDirectoryKey ? " (~/.apns)" : ""
-            pushStatusLabel.stringValue = "Key \(activeConfig.keyID)\(sourceSuffix) · \(readyText)"
-            pushStatusLabel.textColor = pushReadyCount > 0 ? .systemGreen : .secondaryLabelColor
+        let pushReadyDevices = preferences.pushEligibleDevices
+        let pushReadyCount = pushReadyDevices.count
+        let mismatchedDevices = preferences.mismatchedTeamDeviceNames
+        if let kcStatus = preferences.apnsKeychainUnavailableStatus {
+            pushStatusLabel.stringValue = "Keychain APNs key inaccessible (status \(kcStatus)) — re-save your .p8 key or sign ChromaScan with Apple Development."
+            pushStatusLabel.textColor = .systemOrange
             configureAPNsButton.title = "Edit APNs…"
-        } else if let local = preferences.discoveredLocalAPNsConfig, let keyFile = local.keyFilename {
-            pushStatusLabel.stringValue = "Found ~/.apns/\(keyFile) — add your Apple Team ID to enable push."
+        } else if let activeConfig = preferences.apnsConfiguration {
+            let readyText = pushReadyCount == 1 ? "1 push-ready iPhone" : "\(pushReadyCount) push-ready iPhones"
+            let sourceDir = preferences.discoveredLocalAPNsConfig?.sourceDirectoryDisplay ?? "~/.config/chromascan/apns"
+            let sourceSuffix = preferences.isUsingLocalAPNsDirectoryKey ? " (\(sourceDir))" : ""
+            if pushReadyCount > 0 {
+                let targetBundle = pushReadyDevices.first?.apnsBundleID ?? activeConfig.bundleID
+                let envSuffix = pushReadyDevices.first?.apnsEnvironment.map { " · \($0.rawValue)" } ?? ""
+                if !mismatchedDevices.isEmpty {
+                    let names = mismatchedDevices.joined(separator: ", ")
+                    pushStatusLabel.stringValue = "Key \(activeConfig.keyID)\(sourceSuffix) · Team ID mismatch on \(names)\nTarget: \(targetBundle)\(envSuffix)"
+                    pushStatusLabel.textColor = .systemOrange
+                } else {
+                    pushStatusLabel.stringValue = "Key \(activeConfig.keyID)\(sourceSuffix) · \(readyText)\nTarget: \(targetBundle)\(envSuffix)"
+                    pushStatusLabel.textColor = .systemGreen
+                }
+            } else if let regErr = preferences.latestDevicePushRegistrationError {
+                pushStatusLabel.stringValue = "Key \(activeConfig.keyID)\(sourceSuffix) · \(Self.friendlyRegistrationError(regErr))"
+                pushStatusLabel.textColor = .systemOrange
+            } else {
+                pushStatusLabel.stringValue = "Key \(activeConfig.keyID)\(sourceSuffix) · \(readyText)"
+                pushStatusLabel.textColor = .secondaryLabelColor
+            }
+            configureAPNsButton.title = "Edit APNs…"
+        } else if let localError = preferences.discoveredLocalAPNsConfig?.configurationError {
+            pushStatusLabel.stringValue = localError
             pushStatusLabel.textColor = .systemOrange
             configureAPNsButton.title = "Configure APNs…"
+        } else if let local = preferences.discoveredLocalAPNsConfig, let keyFile = local.keyFilename {
+            let dir = local.sourceDirectoryDisplay ?? "~/.config/chromascan/apns"
+            pushStatusLabel.stringValue = "Found \(dir)/\(keyFile) — add your Apple Team ID (or pair a signed iPhone) to enable push."
+            pushStatusLabel.textColor = .systemOrange
+            configureAPNsButton.title = "Configure APNs…"
+        } else if let regErr = preferences.latestDevicePushRegistrationError {
+            pushStatusLabel.stringValue = Self.friendlyRegistrationError(regErr)
+            pushStatusLabel.textColor = .secondaryLabelColor
+            configureAPNsButton.title = "Configure APNs…"
         } else {
-            pushStatusLabel.stringValue = "Not configured — add an Apple APNs .p8 key (or place it in ~/.apns/) for lock-screen scan alerts."
+            pushStatusLabel.stringValue = "Not configured — add an Apple APNs .p8 key (or place it in ~/.config/chromascan/apns/) for lock-screen scan alerts."
             pushStatusLabel.textColor = .secondaryLabelColor
             configureAPNsButton.title = "Configure APNs…"
         }
@@ -303,9 +345,10 @@ final class CompanionPopoverViewController: NSViewController {
     }
 
     @objc private func configureAPNsClicked() {
+        preferences.refreshLocalAPNsConfig()
         let alert = NSAlert()
         alert.messageText = "Direct APNs Push Notifications"
-        alert.informativeText = "Select an Apple Push Notifications (.p8) key from Apple Developer → Certificates, Identifiers & Profiles → Keys (or place AuthKey_<KEYID>.p8 and apns.env in ~/.apns/)."
+        alert.informativeText = "Select an Apple Push Notifications (.p8) key from Apple Developer → Certificates, Identifiers & Profiles → Keys (or install one in ~/.config/chromascan/apns/ via ./scripts/setup-apns.sh)."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
         if preferences.apnsPrivateKeyPEM != nil || !preferences.apnsKeyID.isEmpty || !preferences.apnsTeamID.isEmpty {
@@ -329,8 +372,9 @@ final class CompanionPopoverViewController: NSViewController {
         let initialStatusText: String
         if preferences.apnsPrivateKeyPEM != nil {
             initialStatusText = "Stored in Keychain (.p8 loaded)"
-        } else if let file = preferences.discoveredLocalAPNsConfig?.keyFilename {
-            initialStatusText = "Auto-loaded ~/.apns/\(file)"
+        } else if let local = preferences.discoveredLocalAPNsConfig, let file = local.keyFilename {
+            let dir = local.sourceDirectoryDisplay ?? "~/.config/chromascan/apns"
+            initialStatusText = "Auto-loaded \(dir)/\(file)"
         } else {
             initialStatusText = "No .p8 key file selected"
         }
@@ -398,21 +442,35 @@ final class CompanionPopoverViewController: NSViewController {
                 presentValidationError("The selected .p8 file is not a valid P-256 private key: \(error.localizedDescription)")
                 return
             }
+            guard preferences.saveAPNsPrivateKeyPEM(pem) else {
+                presentValidationError("Could not store the APNs .p8 key in the macOS Keychain. Sign ChromaScan with an Apple Development certificate in Config/Local.xcconfig, or place the .p8 file in ~/.config/chromascan/apns/ (chmod 600).")
+                return
+            }
             preferences.apnsKeyID = keyID
             preferences.apnsTeamID = teamID
             preferences.apnsBundleID = bundleID
-            preferences.apnsPrivateKeyPEM = pem
             server.notifyAPNsConfigurationChanged()
             refreshUI()
 
         case .alertThirdButtonReturn:
-            preferences.clearAPNsConfiguration()
+            if !preferences.clearAPNsConfiguration() {
+                presentValidationError("Could not remove the saved APNs key from the macOS Keychain.")
+                return
+            }
+            preferences.refreshLocalAPNsConfig()
             server.notifyAPNsConfigurationChanged()
             refreshUI()
 
         default:
             break
         }
+    }
+
+    private static func friendlyRegistrationError(_ rawError: String) -> String {
+        if rawError.localizedCaseInsensitiveContains("aps-environment") {
+            return "iPhone app lacks Push entitlement (enable CHROMASCAN_IOS_ENTITLEMENTS with a paid Apple Developer account)."
+        }
+        return "iPhone push unavailable: \(rawError)"
     }
 
     private func presentValidationError(_ message: String) {
@@ -454,8 +512,7 @@ private final class APNsKeyPickerHandler: NSObject {
             selectedPEM = pem
             statusLabel.stringValue = "Loaded \(url.lastPathComponent)"
             statusLabel.textColor = .systemGreen
-            if keyIDField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-               let extracted = APNsConfiguration.extractKeyID(fromFilename: url.lastPathComponent) {
+            if let extracted = APNsConfiguration.extractKeyID(fromFilename: url.lastPathComponent) {
                 keyIDField.stringValue = extracted
             }
         } catch {
