@@ -5,15 +5,18 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
@@ -26,9 +29,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -63,6 +68,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -76,6 +82,8 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -123,10 +131,40 @@ fun RemoteWorkspaceScreen(
     var showControlsSheet by remember { mutableStateOf(false) }
     var showHostDialog by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
+    var topPillHeightPx by remember { mutableIntStateOf(0) }
+    var bottomDockHeightPx by remember { mutableIntStateOf(0) }
 
+    val density = LocalDensity.current
     val snap = state.snapshot
     val isBusy = snap?.isBusy == true
-    val canvasBottomPad = if (isBusy) 182.dp else 144.dp
+    val hasTopPill = state.topStatusPrimaryLine.isNotBlank() || state.topStatusSecondaryLine.isNotBlank()
+    val hasTopChips = state.showsTrimChip || state.showsFullPageChip
+
+    val topPillHeightDp = if (topPillHeightPx > 0) with(density) { topPillHeightPx.toDp() } else 42.dp
+    val bottomDockHeightDp = if (bottomDockHeightPx > 0) {
+        with(density) { bottomDockHeightPx.toDp() }
+    } else if (isBusy) {
+        144.dp
+    } else {
+        80.dp
+    }
+    val navBottomDp = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
+
+    val targetTopPad = (if (hasTopPill) 10.dp + topPillHeightDp else 0.dp) +
+        (if (hasTopChips) 40.dp else 0.dp) +
+        16.dp
+    val targetBottomPad = navBottomDp + 12.dp + bottomDockHeightDp + 16.dp
+
+    val canvasTopPad by animateDpAsState(
+        targetValue = targetTopPad,
+        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+        label = "canvas_top_pad"
+    )
+    val canvasBottomPad by animateDpAsState(
+        targetValue = targetBottomPad,
+        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+        label = "canvas_bottom_pad"
+    )
 
     Box(
         modifier = Modifier
@@ -165,7 +203,7 @@ fun RemoteWorkspaceScreen(
                             isCropEditable = state.isConnected && !snap.isBusy && !state.isAwaitingRotatedProxy,
                             cropRect = snap.cropRect,
                             rotation = state.proxyRotation,
-                            topContentPadding = 104.dp,
+                            topContentPadding = canvasTopPad,
                             bottomContentPadding = canvasBottomPad,
                             onCropChanged = onCropChanged,
                             onRequestTile = onRequestTile,
@@ -177,7 +215,7 @@ fun RemoteWorkspaceScreen(
                             showingScan = showingScan,
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(bottom = canvasBottomPad)
+                                .padding(top = canvasTopPad, bottom = canvasBottomPad)
                         )
                     }
 
@@ -188,16 +226,17 @@ fun RemoteWorkspaceScreen(
                             .fillMaxWidth()
                             .padding(horizontal = 14.dp, vertical = 10.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                        verticalArrangement = Arrangement.Top
                     ) {
                         val primaryLine = state.topStatusPrimaryLine
                         val secondaryLine = state.topStatusSecondaryLine
-                        if (primaryLine.isNotBlank() || secondaryLine.isNotBlank()) {
+                        if (hasTopPill) {
                             Surface(
                                 onClick = { showControlsSheet = true },
                                 shape = RoundedCornerShape(18.dp),
                                 color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
-                                tonalElevation = 2.dp
+                                tonalElevation = 2.dp,
+                                modifier = Modifier.onSizeChanged { topPillHeightPx = it.height }
                             ) {
                                 Row(
                                     modifier = Modifier.padding(start = 14.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
@@ -257,59 +296,79 @@ fun RemoteWorkspaceScreen(
                             }
                         }
 
-                        if (state.showsTrimChip || state.showsFullPageChip) {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                        val chipEnter = fadeIn(
+                            animationSpec = tween(durationMillis = 180, delayMillis = 45, easing = FastOutSlowInEasing)
+                        ) + scaleIn(
+                            animationSpec = tween(durationMillis = 200, delayMillis = 45, easing = FastOutSlowInEasing),
+                            initialScale = 0.9f
+                        ) + expandHorizontally(
+                            animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                            expandFrom = Alignment.CenterHorizontally,
+                            clip = false
+                        )
+                        val chipExit = fadeOut(
+                            animationSpec = tween(durationMillis = 110, easing = FastOutSlowInEasing)
+                        ) + scaleOut(
+                            animationSpec = tween(durationMillis = 140, easing = FastOutSlowInEasing),
+                            targetScale = 0.9f
+                        ) + shrinkHorizontally(
+                            animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                            shrinkTowards = Alignment.CenterHorizontally,
+                            clip = false
+                        )
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            AnimatedVisibility(
+                                visible = state.showsTrimChip,
+                                enter = chipEnter,
+                                exit = chipExit
                             ) {
-                                AnimatedVisibility(
-                                    visible = state.showsTrimChip,
-                                    enter = fadeIn() + scaleIn(initialScale = 0.9f),
-                                    exit = fadeOut() + scaleOut(targetScale = 0.9f)
-                                ) {
-                                    ElevatedAssistChip(
-                                        onClick = onTrimEmptySpace,
-                                        enabled = state.isConnected && !snap.isBusy,
-                                        shape = RoundedCornerShape(50),
-                                        label = { Text("Trim", style = MaterialTheme.typography.labelMedium) },
-                                        leadingIcon = {
-                                            MaterialSymbol(
-                                                iconRes = R.drawable.ms_crop,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        },
-                                        colors = AssistChipDefaults.elevatedAssistChipColors(
-                                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
-                                            labelColor = MaterialTheme.colorScheme.onSurface,
-                                            leadingIconContentColor = MaterialTheme.colorScheme.primary
+                                ElevatedAssistChip(
+                                    onClick = onTrimEmptySpace,
+                                    enabled = state.isConnected && !snap.isBusy,
+                                    shape = RoundedCornerShape(50),
+                                    modifier = Modifier.padding(horizontal = 4.dp),
+                                    label = { Text("Trim", style = MaterialTheme.typography.labelMedium) },
+                                    leadingIcon = {
+                                        MaterialSymbol(
+                                            iconRes = R.drawable.ms_crop,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
                                         )
+                                    },
+                                    colors = AssistChipDefaults.elevatedAssistChipColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
+                                        labelColor = MaterialTheme.colorScheme.onSurface,
+                                        leadingIconContentColor = MaterialTheme.colorScheme.primary
                                     )
-                                }
-                                AnimatedVisibility(
-                                    visible = state.showsFullPageChip,
-                                    enter = fadeIn() + scaleIn(initialScale = 0.9f),
-                                    exit = fadeOut() + scaleOut(targetScale = 0.9f)
-                                ) {
-                                    ElevatedAssistChip(
-                                        onClick = onResetCrop,
-                                        enabled = state.isConnected && !snap.isBusy,
-                                        shape = RoundedCornerShape(50),
-                                        label = { Text("Full page", style = MaterialTheme.typography.labelMedium) },
-                                        leadingIcon = {
-                                            MaterialSymbol(
-                                                iconRes = R.drawable.ms_fit_screen,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        },
-                                        colors = AssistChipDefaults.elevatedAssistChipColors(
-                                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
-                                            labelColor = MaterialTheme.colorScheme.onSurface,
-                                            leadingIconContentColor = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            AnimatedVisibility(
+                                visible = state.showsFullPageChip,
+                                enter = chipEnter,
+                                exit = chipExit
+                            ) {
+                                ElevatedAssistChip(
+                                    onClick = onResetCrop,
+                                    enabled = state.isConnected && !snap.isBusy,
+                                    shape = RoundedCornerShape(50),
+                                    modifier = Modifier.padding(horizontal = 4.dp),
+                                    label = { Text("Full page", style = MaterialTheme.typography.labelMedium) },
+                                    leadingIcon = {
+                                        MaterialSymbol(
+                                            iconRes = R.drawable.ms_fit_screen,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
                                         )
+                                    },
+                                    colors = AssistChipDefaults.elevatedAssistChipColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
+                                        labelColor = MaterialTheme.colorScheme.onSurface,
+                                        leadingIconContentColor = MaterialTheme.colorScheme.primary
                                     )
-                                }
+                                )
                             }
                         }
                     }
@@ -377,6 +436,7 @@ fun RemoteWorkspaceScreen(
             if (snap != null) {
                 AnimatedContent(
                     targetState = snap.isBusy,
+                    modifier = Modifier.onSizeChanged { bottomDockHeightPx = it.height },
                     transitionSpec = {
                         (fadeIn() + slideInVertically { it / 4 }) togetherWith
                             (fadeOut() + slideOutVertically { it / 4 })
@@ -1044,14 +1104,6 @@ private fun RenameFilenameDialog(
         onDismissRequest = onDismiss,
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = RoundedCornerShape(28.dp),
-        icon = {
-            MaterialSymbol(
-                iconRes = R.drawable.ms_edit,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(24.dp)
-            )
-        },
         title = { Text("Rename output file") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -269,9 +269,10 @@ fun RemoteCanvas(
                     val baseRect = computeBasePageRect(viewportSize, proxyBitmap.width, proxyBitmap.height)
                     val curPageRect = transformedPageRect(baseRect, zoomScale, panOffset)
 
-                    var dragMode: CropDragMode = CropDragMode.None
+                    val initialCrop = currentCrop
+                    var pendingCropMode: CropDragMode = CropDragMode.None
                     if (currentShowCrop && currentCropEditable && curPageRect.width > 10f && curPageRect.height > 10f) {
-                        val displayNorm = currentCrop.physicalToDisplay(currentRotation)
+                        val displayNorm = initialCrop.physicalToDisplay(currentRotation)
                         val selRect = Rect(
                             left = curPageRect.left + displayNorm.minX.toFloat() * curPageRect.width,
                             top = curPageRect.top + displayNorm.minY.toFloat() * curPageRect.height,
@@ -279,93 +280,123 @@ fun RemoteCanvas(
                             bottom = curPageRect.top + displayNorm.maxY.toFloat() * curPageRect.height
                         )
                         val hitHandle = hitTestHandle(firstDown.position, selRect, handleHitRadiusPx)
-                        dragMode = when {
+                        pendingCropMode = when {
                             hitHandle != null -> CropDragMode.Resize(hitHandle, firstDown.position, displayNorm)
-                            !currentCrop.isFull && selRect.contains(firstDown.position) ->
+                            // Only move trimmed marquee with 1 finger when unzoomed; when zoomed in,
+                            // 1-finger drag pans the zoomed canvas and 2-finger pinch always zooms.
+                            !initialCrop.isFull && zoomScale <= 1.02f && selRect.contains(firstDown.position) ->
                                 CropDragMode.Move(firstDown.position, displayNorm)
                             else -> CropDragMode.None
                         }
                     }
 
-                    if (dragMode !is CropDragMode.None) {
-                        firstDown.consume()
-                        isDraggingCrop = true
-                        var latestCrop = currentCrop
-                        try {
-                            while (true) {
-                                val event = awaitPointerEvent()
-                                val activePointers = event.changes.filter { it.pressed }
-                                if (activePointers.isEmpty() || activePointers.size > 1) {
-                                    currentOnCropChanged(latestCrop, true)
-                                    break
-                                }
-                                val change = activePointers.first()
-                                if (change.positionChanged()) {
-                                    change.consume()
-                                    val updated = applyCropDrag(
-                                        mode = dragMode,
-                                        pt = change.position,
-                                        pageRect = curPageRect,
-                                        rotation = currentRotation
-                                    )
-                                    if (updated != null) {
-                                        latestCrop = updated
-                                        activeDragCrop = updated
-                                        currentOnCropChanged(updated, false)
-                                    }
-                                }
-                            }
-                        } finally {
-                            activeDragCrop = null
-                            isDraggingCrop = false
-                        }
-                    } else {
-                        var moved = false
-                        var didTransform = false
-                        val startPos = firstDown.position
-                        val downTime = System.currentTimeMillis()
-                        val maxZoom = computeMaxZoom(baseRect)
+                    val cropTouchSlop = viewConfig.touchSlop
+                    var activeCropMode: CropDragMode = CropDragMode.None
+                    var latestCrop = initialCrop
+                    var moved = false
+                    var didTransform = false
+                    val startPos = firstDown.position
+                    val downTime = System.currentTimeMillis()
+                    val maxZoom = computeMaxZoom(baseRect)
 
+                    // For handle grabs, consume immediately once dragging starts; never block a
+                    // second finger from seamlessly taking over as pinch-to-zoom.
+                    try {
                         while (true) {
                             val event = awaitPointerEvent()
                             val pressed = event.changes.filter { it.pressed }
+
                             if (pressed.isEmpty()) {
-                                val elapsed = System.currentTimeMillis() - downTime
-                                if (!moved && elapsed < doubleTapTimeoutMs) {
-                                    val sinceLastTap = downTime - lastTapTimeMs
-                                    val distLast = hypot(
-                                        (startPos.x - lastTapPos.x).toDouble(),
-                                        (startPos.y - lastTapPos.y).toDouble()
-                                    )
-                                    if (sinceLastTap < doubleTapTimeoutMs && distLast < 96.0) {
-                                        if (zoomScale > 1.05f) {
-                                            zoomScale = 1f
-                                            panOffset = Offset.Zero
-                                            currentOnClearTile()
-                                            updateZoomBadge(1f, baseRect, hasTile = false, loading = false)
+                                if (activeCropMode !is CropDragMode.None) {
+                                    currentOnCropChanged(latestCrop, true)
+                                } else {
+                                    val elapsed = System.currentTimeMillis() - downTime
+                                    if (!moved && elapsed < doubleTapTimeoutMs) {
+                                        val sinceLastTap = downTime - lastTapTimeMs
+                                        val distLast = hypot(
+                                            (startPos.x - lastTapPos.x).toDouble(),
+                                            (startPos.y - lastTapPos.y).toDouble()
+                                        )
+                                        if (sinceLastTap < doubleTapTimeoutMs && distLast < 96.0) {
+                                            if (zoomScale > 1.05f) {
+                                                zoomScale = 1f
+                                                panOffset = Offset.Zero
+                                                currentOnClearTile()
+                                                updateZoomBadge(1f, baseRect, hasTile = false, loading = false)
+                                            } else {
+                                                val targetScale = (currentTrueW.toFloat() / max(1f, baseRect.width))
+                                                    .coerceIn(2.5f, maxZoom)
+                                                val rawPan = Offset(
+                                                    x = (baseRect.center.x - startPos.x) * (targetScale - 1f),
+                                                    y = (baseRect.center.y - startPos.y) * (targetScale - 1f)
+                                                )
+                                                zoomScale = targetScale
+                                                panOffset = clampPan(rawPan, targetScale, baseRect, viewportSize)
+                                                updateZoomBadge(targetScale, baseRect, hasTile = false, loading = false)
+                                                scheduleTileRequest(zoomScale, panOffset, baseRect, viewportSize)
+                                            }
+                                            lastTapTimeMs = 0L
                                         } else {
-                                            val targetScale = (currentTrueW.toFloat() / max(1f, baseRect.width))
-                                                .coerceIn(2.5f, maxZoom)
-                                            val rawPan = Offset(
-                                                x = (baseRect.center.x - startPos.x) * (targetScale - 1f),
-                                                y = (baseRect.center.y - startPos.y) * (targetScale - 1f)
-                                            )
-                                            zoomScale = targetScale
-                                            panOffset = clampPan(rawPan, targetScale, baseRect, viewportSize)
-                                            updateZoomBadge(targetScale, baseRect, hasTile = false, loading = false)
-                                            scheduleTileRequest(zoomScale, panOffset, baseRect, viewportSize)
+                                            lastTapTimeMs = downTime
+                                            lastTapPos = startPos
                                         }
-                                        lastTapTimeMs = 0L
-                                    } else {
-                                        lastTapTimeMs = downTime
-                                        lastTapPos = startPos
+                                    } else if (didTransform) {
+                                        scheduleTileRequest(zoomScale, panOffset, baseRect, viewportSize)
                                     }
-                                } else if (didTransform) {
-                                    scheduleTileRequest(zoomScale, panOffset, baseRect, viewportSize)
                                 }
                                 break
                             }
 
+                            // A second finger always wins for pinch-to-zoom, even inside a trimmed marquee.
+                            if (pressed.size >= 2) {
+                                if (activeCropMode !is CropDragMode.None) {
+                                    // Revert tiny accidental nudge before second finger landed
+                                    activeDragCrop = null
+                                    isDraggingCrop = false
+                                    activeCropMode = CropDragMode.None
+                                    currentOnCropChanged(initialCrop, true)
+                                }
+                                pendingCropMode = CropDragMode.None
+                            }
+
+                            // Single-finger crop handle resize or unzoomed trimmed marquee move
+                            if (pressed.size == 1 && (activeCropMode !is CropDragMode.None || pendingCropMode !is CropDragMode.None)) {
+                                val change = pressed.first()
+                                val distFromStart = hypot(
+                                    (change.position.x - startPos.x).toDouble(),
+                                    (change.position.y - startPos.y).toDouble()
+                                ).toFloat()
+                                if (activeCropMode is CropDragMode.None) {
+                                    val threshold = if (pendingCropMode is CropDragMode.Resize) cropTouchSlop * 0.4f else cropTouchSlop
+                                    if (distFromStart >= threshold) {
+                                        activeCropMode = pendingCropMode
+                                        pendingCropMode = CropDragMode.None
+                                        isDraggingCrop = true
+                                        moved = true
+                                    }
+                                }
+                                if (activeCropMode !is CropDragMode.None) {
+                                    if (change.positionChanged()) {
+                                        change.consume()
+                                        val updated = applyCropDrag(
+                                            mode = activeCropMode,
+                                            pt = change.position,
+                                            pageRect = curPageRect,
+                                            rotation = currentRotation
+                                        )
+                                        if (updated != null) {
+                                            latestCrop = updated
+                                            activeDragCrop = updated
+                                            currentOnCropChanged(updated, false)
+                                        }
+                                    }
+                                    continue
+                                }
+                                // Still below touch slop waiting to see if user taps, drags, or places 2nd finger
+                                continue
+                            }
+
+                            // Pinch-to-zoom and zoomed panning
                             val zoomChange = event.calculateZoom()
                             val panChange = event.calculatePan()
                             val centroid = event.calculateCentroid(useCurrent = false)
@@ -400,6 +431,9 @@ fun RemoteCanvas(
                                 event.changes.forEach { if (it.positionChanged()) it.consume() }
                             }
                         }
+                    } finally {
+                        activeDragCrop = null
+                        isDraggingCrop = false
                     }
                 }
             }
