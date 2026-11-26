@@ -492,4 +492,23 @@ final class ChromaScanTests: XCTestCase {
         XCTAssertFalse(check(dpi: 200, mb: 2, seconds: 20))
         XCTAssertFalse(check(format: .jpeg, mb: 2, seconds: 20))
     }
+
+    func testNetworkCounterpartPicksSamePrinterOverPlainHTTP() {
+        func s(_ id: String, _ host: String, _ port: Int, tls: Bool, uuid: String?, _ transport: ScannerTransport, model: String = "HP OfficeJet 3830 series") -> DiscoveredScanner {
+            DiscoveredScanner(id: id, name: model, host: host, port: port, useTLS: tls, rootPath: "eSCL",
+                              modelName: model, uuid: uuid, transport: transport)
+        }
+        let usb = s("usb", "127.0.0.1", 56824, tls: false, uuid: "hp-uuid", .usb)
+        let bonjour = [
+            s("usb-bonjour", "localhost", 56824, tls: false, uuid: "hp-uuid", .usb),
+            s("wifi-https", "hp.local", 443, tls: true, uuid: "hp-uuid", .wifi),
+            s("wifi-http", "hp.local", 8080, tls: false, uuid: "hp-uuid", .wifi),
+            s("other", "canon.local", 80, tls: false, uuid: "canon-uuid", .wifi, model: "Canon TS"),
+        ]
+        XCTAssertEqual(ScannerDeduplicator.networkCounterpart(for: usb, among: bonjour)?.id, "wifi-http")
+        // No counterpart for a different printer, or when asked for a non-USB scanner.
+        let otherUSB = s("usb2", "127.0.0.1", 1, tls: false, uuid: "epson-uuid", .usb, model: "Epson ET")
+        XCTAssertNil(ScannerDeduplicator.networkCounterpart(for: otherUSB, among: bonjour))
+        XCTAssertNil(ScannerDeduplicator.networkCounterpart(for: bonjour[2], among: bonjour))
+    }
 }

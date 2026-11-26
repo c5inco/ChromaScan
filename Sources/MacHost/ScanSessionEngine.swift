@@ -762,6 +762,124 @@ final class ScanSessionEngine {
         startCapture(isPreview: false)
     }
 
+    /// Per-attempt state shared between the download task and its progress callbacks.
+    @MainActor
+    private final class DownloadAttempt {
+        var task: Task<ScanDownloadResult, Error>?
+        var switchToNetworkRequested = false
+    }
+
+    /// Runs the scan download and, if a USB transfer is stuck in the printer's slow mode (see
+    /// `isSlowUSBTransfer`) while the same printer is advertised on Wi-Fi, cancels the USB job once and
+    /// restarts the same scan over Wi-Fi (~0.3–0.43 MB/s there vs ~0.19 MB/s in USB slow mode).
+    /// Without a Wi-Fi endpoint it keeps the USB transfer and shows `slowUSBHint` instead.
+    private func downloadWithUSBFallback(
+        scanner: DiscoveredScanner,
+        request: ScanJobRequest,
+        isPreview: Bool,
+        resolution: Int,
+        operation op: CompanionOperation,
+        labelPrefix: String,
+        startTime: CFAbsoluteTime,
+        captureID: UUID
+    ) async throws -> ScanDownloadResult {
+        var current = scanner
+        var fallbackAllowed = scanner.transport == .usb && !isPreview
+        var viaFallback = false
+
+        while true {
+            let attemptScanner = current
+            let fallbackTarget = fallbackAllowed ? browser.networkCounterpart(for: attemptScanner) : nil
+            let attemptViaFallback = viaFallback
+            let attempt = DownloadAttempt()
+            captureFirstByteTime = nil
+            captureSlowUSBWarned = false
+
+            let client = self.client
+            attempt.task = Task {
+                try await client.performScan(scanner: attemptScanner, request: request) { [weak self] recv, expected in
+                    let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+                    Task { @MainActor [weak self] in
+                        guard let self, self.isBusy, self.captureID == captureID,
+                              !attempt.switchToNetworkRequested else { return }
+                        self.captureBytesReceived = max(self.captureBytesReceived, recv)
+                        if recv > 0, self.captureFirstByteTime == nil {
+                            self.captureFirstByteTime = CFAbsoluteTimeGetCurrent()
+                        }
+                        if !self.captureSlowUSBWarned, let first = self.captureFirstByteTime,
+                           Self.isSlowUSBTransfer(
+                               transport: attemptScanner.transport,
+                               isPreview: isPreview,
+                               resolution: resolution,
+                               transferFormat: request.transferFormat,
+                               bytesReceived: recv,
+                               streamingSeconds: CFAbsoluteTimeGetCurrent() - first
+                           ) {
+                            self.captureSlowUSBWarned = true
+                            let streamed = CFAbsoluteTimeGetCurrent() - first
+                            if let target = fallbackTarget {
+                                transferLog.notice("SLOW-USB detected: \(Double(recv) / 1e6, format: .fixed(precision: 1)) MB in \(streamed, format: .fixed(precision: 0))s — switching to network endpoint \(target.host, privacy: .public):\(target.port)")
+                                attempt.switchToNetworkRequested = true
+                                attempt.task?.cancel()
+                                return
+                            }
+                            transferLog.notice("SLOW-USB detected: \(Double(recv) / 1e6, format: .fixed(precision: 1)) MB in \(streamed, format: .fixed(precision: 0))s — no network endpoint, showing power-cycle hint")
+                        }
+                        let recvMB = Double(recv) / (1024.0 * 1024.0)
+                        var status: String
+                        if expected > 0 {
+                            let expMB = Double(expected) / (1024.0 * 1024.0)
+                            status = String(format: "%@ · %.1f / %.1f MB (%.0fs)", labelPrefix, recvMB, expMB, elapsed)
+                        } else {
+                            status = String(format: "%@ · %.1f MB (%.0fs)", labelPrefix, recvMB, elapsed)
+                        }
+                        if attemptViaFallback {
+                            status += " · via Wi-Fi (USB was slow)"
+                        } else if self.captureSlowUSBWarned {
+                            status += " · " + Self.slowUSBHint
+                        }
+                        self.statusText = status
+                        self.emit(.progress(operation: op, bytesReceived: recv, expectedBytes: expected, elapsedSeconds: elapsed, statusText: status))
+                    }
+                }
+            }
+
+            do {
+                let task = attempt.task!
+                return try await withTaskCancellationHandler {
+                    try await task.value
+                } onCancel: {
+                    task.cancel()
+                }
+            } catch {
+                guard attempt.switchToNetworkRequested, let target = fallbackTarget, !Task.isCancelled else {
+                    throw error
+                }
+                // The USB job was cancelled (ESCLClient sent DELETE). Restart the same scan over Wi-Fi.
+                fallbackAllowed = false
+                viaFallback = true
+                current = target
+                let expectedBytes = request.transferFormat == .rawOctetStream ? request.expectedRawByteCount : 0
+                let status = "\(labelPrefix) · USB slow — switching to Wi-Fi…"
+                statusText = status
+                emit(.progress(operation: op, bytesReceived: 0, expectedBytes: expectedBytes,
+                               elapsedSeconds: CFAbsoluteTimeGetCurrent() - startTime, statusText: status))
+                await waitForScannerIdle(target, timeout: 20)
+                try Task.checkCancellation()
+            }
+        }
+    }
+
+    /// Polls ScannerStatus until the scanner reports Idle (e.g. after cancelling a job), up to `timeout`.
+    private func waitForScannerIdle(_ scanner: DiscoveredScanner, timeout: TimeInterval) async {
+        let deadline = CFAbsoluteTimeGetCurrent() + timeout
+        while CFAbsoluteTimeGetCurrent() < deadline, !Task.isCancelled {
+            if let status = try? await client.fetchStatus(from: scanner), status.state == "Idle" { return }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+        transferLog.notice("SLOW-USB fallback: scanner not Idle after \(Int(timeout))s; starting Wi-Fi scan anyway")
+    }
+
     /// Normally image data starts within ~10 s (1200 DPI warm-up is ~8 s). If nothing has arrived after
     /// 15 s, say so instead of sitting silently at 0% — on Mac and on the companion via `.progress`.
     private func startWaitingForScannerWatchdog(captureID: UUID, operation op: CompanionOperation, labelPrefix: String, startTime: CFAbsoluteTime, expectedBytes: Int64) {
@@ -868,43 +986,16 @@ final class ScanSessionEngine {
                 self.reconcileSelectionIfNeededAfterBusy()
             }
             do {
-                let download = try await self.client.performScan(scanner: scanner, request: request) { [weak self] recv, expected in
-                    let elapsed = CFAbsoluteTimeGetCurrent() - startTime
-                    Task { @MainActor [weak self] in
-                        guard let self, self.isBusy else { return }
-                        if self.captureID == thisCaptureID {
-                            self.captureBytesReceived = max(self.captureBytesReceived, recv)
-                            if recv > 0, self.captureFirstByteTime == nil {
-                                self.captureFirstByteTime = CFAbsoluteTimeGetCurrent()
-                            }
-                            if !self.captureSlowUSBWarned, let first = self.captureFirstByteTime,
-                               Self.isSlowUSBTransfer(
-                                   transport: scanner.transport,
-                                   isPreview: isPreview,
-                                   resolution: resolution,
-                                   transferFormat: request.transferFormat,
-                                   bytesReceived: recv,
-                                   streamingSeconds: CFAbsoluteTimeGetCurrent() - first
-                               ) {
-                                self.captureSlowUSBWarned = true
-                                transferLog.notice("SLOW-USB detected: \(Double(recv) / 1e6, format: .fixed(precision: 1)) MB in \(CFAbsoluteTimeGetCurrent() - first, format: .fixed(precision: 0))s of streaming — showing power-cycle hint")
-                            }
-                        }
-                        let recvMB = Double(recv) / (1024.0 * 1024.0)
-                        var status: String
-                        if expected > 0 {
-                            let expMB = Double(expected) / (1024.0 * 1024.0)
-                            status = String(format: "%@ · %.1f / %.1f MB (%.0fs)", labelPrefix, recvMB, expMB, elapsed)
-                        } else {
-                            status = String(format: "%@ · %.1f MB (%.0fs)", labelPrefix, recvMB, elapsed)
-                        }
-                        if self.captureSlowUSBWarned && self.captureID == thisCaptureID {
-                            status += " · " + Self.slowUSBHint
-                        }
-                        self.statusText = status
-                        self.emit(.progress(operation: op, bytesReceived: recv, expectedBytes: expected, elapsedSeconds: elapsed, statusText: status))
-                    }
-                }
+                let download = try await self.downloadWithUSBFallback(
+                    scanner: scanner,
+                    request: request,
+                    isPreview: isPreview,
+                    resolution: resolution,
+                    operation: op,
+                    labelPrefix: labelPrefix,
+                    startTime: startTime,
+                    captureID: thisCaptureID
+                )
 
                 try Task.checkCancellation()
 

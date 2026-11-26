@@ -160,6 +160,56 @@ final class MockESCLClient: ESCLClientProtocol, @unchecked Sendable {
 // MARK: - ScanSessionEngine Tests
 
 @MainActor
+/// Browser that knows the Wi-Fi endpoint of the USB scanner (like `CompositeScannerBrowser`).
+final class FallbackMockScannerBrowser: ScannerBrowserProtocol {
+    var onScannersChanged: (([DiscoveredScanner]) -> Void)?
+    var scanners: [DiscoveredScanner] = []
+    var wifiCounterpart: DiscoveredScanner?
+    func start() { onScannersChanged?(scanners) }
+    func stop() {}
+    func addManualScanner(host: String, port: Int, useTLS: Bool, rootPath: String) {}
+    func networkCounterpart(for scanner: DiscoveredScanner) -> DiscoveredScanner? {
+        scanner.transport == .usb ? wifiCounterpart : nil
+    }
+}
+
+/// USB scans trickle at the printer's slow-mode rate until cancelled; network scans are fast.
+final class SlowUSBMockESCLClient: ESCLClientProtocol, @unchecked Sendable {
+    let inner = MockESCLClient()
+    var scannersUsed: [ScannerTransport] = []
+    var usbCancelled = false
+
+    func fetchCapabilities(from scanner: DiscoveredScanner) async throws -> ScannerCapabilities {
+        try await inner.fetchCapabilities(from: scanner)
+    }
+    func fetchStatus(from scanner: DiscoveredScanner) async throws -> ScannerStatus {
+        try await inner.fetchStatus(from: scanner)
+    }
+    func performScan(
+        scanner: DiscoveredScanner,
+        request: ScanJobRequest,
+        onProgress: @escaping @Sendable (Int64, Int64) -> Void
+    ) async throws -> ScanDownloadResult {
+        scannersUsed.append(scanner.transport)
+        guard scanner.transport == .usb else {
+            return try await inner.performScan(scanner: scanner, request: request, onProgress: onProgress)
+        }
+        let expected = request.expectedRawByteCount
+        var received: Int64 = 0
+        while true {
+            do {
+                try await Task.sleep(nanoseconds: 250_000_000)
+            } catch {
+                usbCancelled = true
+                throw ESCLClientError.cancelled
+            }
+            received += 47_500 // ~0.19 MB/s
+            onProgress(received, expected)
+        }
+    }
+}
+
+@MainActor
 final class ScanSessionEngineTests: XCTestCase {
 
     private func makeIsolatedEngine(client: MockESCLClient = MockESCLClient()) -> (ScanSessionEngine, MockScannerBrowser, MockESCLClient, URL) {
@@ -371,6 +421,50 @@ final class ScanSessionEngineTests: XCTestCase {
         try await waitUntil(timeout: 2.0) { engine.isScanTrimmed }
         XCTAssertEqual(engine.makeSnapshot().scanPixelWidth, trimmedCG.width)
         XCTAssertEqual(engine.makeSnapshot().scanPixelHeight, trimmedCG.height)
+    }
+
+
+    func testSlowUSBScanFallsBackToWiFi() async throws {
+        let suite = "com.chromascan.test.\(UUID().uuidString)"
+        let prefs = AppPreferences(defaults: UserDefaults(suiteName: suite)!)
+        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("chromascan-fallback-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: tmpDir)
+            UserDefaults().removePersistentDomain(forName: suite)
+        }
+        prefs.saveFolderURL = tmpDir
+        prefs.baseFilename = "fallback-001"
+        prefs.resolution = 300
+        prefs.outputFormat = .tiffLZW
+
+        let usb = DiscoveredScanner(
+            id: "usb:hp", name: "HP OfficeJet 3830 series (USB)", host: "127.0.0.1", port: 56824,
+            useTLS: false, rootPath: "eSCL", modelName: "HP OfficeJet 3830 series", uuid: "hp-uuid", transport: .usb)
+        let wifi = DiscoveredScanner(
+            id: "wifi:hp", name: "HP OfficeJet 3830 series", host: "hp.local", port: 8080,
+            useTLS: false, rootPath: "eSCL", modelName: "HP OfficeJet 3830 series", uuid: "hp-uuid", transport: .wifi)
+        let browser = FallbackMockScannerBrowser()
+        browser.scanners = [usb]
+        browser.wifiCounterpart = wifi
+        let client = SlowUSBMockESCLClient()
+        let engine = ScanSessionEngine(preferences: prefs, browser: browser, client: client)
+
+        engine.startDiscovery()
+        try await waitUntil(timeout: 2.0) { engine.capabilities != nil }
+        XCTAssertEqual(engine.settings.transferFormat, .rawOctetStream)
+
+        engine.startScan()
+        // Slow USB is judged after 8 s of streaming, then the scan restarts over Wi-Fi and completes.
+        try await waitUntil(timeout: 20.0) { !engine.isBusy && engine.lastSavedURL != nil }
+
+        XCTAssertEqual(client.scannersUsed, [.usb, .wifi])
+        XCTAssertTrue(client.usbCancelled)
+        XCTAssertFalse(engine.isErrorStatus)
+        let saved = try XCTUnwrap(engine.lastSavedURL)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: saved.path))
+        // The selected scanner stays the USB one; only this scan was routed over Wi-Fi.
+        XCTAssertEqual(engine.selectedScannerID, "usb:hp")
     }
 
     private func waitUntil(timeout: TimeInterval, condition: @escaping @MainActor () -> Bool) async throws {

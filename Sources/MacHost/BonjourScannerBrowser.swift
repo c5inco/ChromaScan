@@ -9,9 +9,14 @@ protocol ScannerBrowserProtocol: AnyObject {
     func stop()
     func refresh()
     func addManualScanner(host: String, port: Int, useTLS: Bool, rootPath: String)
+    /// The network (Wi-Fi/LAN) endpoint of the same physical scanner as a USB `scanner`, if one is
+    /// currently advertised. Used to fall back from a slow USB transfer.
+    func networkCounterpart(for scanner: DiscoveredScanner) -> DiscoveredScanner?
 }
 
 extension ScannerBrowserProtocol {
+    func networkCounterpart(for scanner: DiscoveredScanner) -> DiscoveredScanner? { nil }
+
     func refresh() {
         start()
     }
@@ -113,6 +118,36 @@ enum ScannerDeduplicator {
             $0.displayTitle.localizedCaseInsensitiveCompare($1.displayTitle) == .orderedAscending
         }
         return sortedUSB + sortedWiFi + manualScanners
+    }
+
+    /// The best network (Wi-Fi) endpoint among `bonjourScanners` for the same physical scanner as `usb`
+    /// (same matching rules used to hide Wi-Fi duplicates of attached USB scanners), preferring plain HTTP.
+    static func networkCounterpart(for usb: DiscoveredScanner, among bonjourScanners: [DiscoveredScanner]) -> DiscoveredScanner? {
+        guard usb.transport == .usb else { return nil }
+        let wifi = bonjourScanners.filter { $0.transport == .wifi }
+        guard !wifi.isEmpty else { return nil }
+        var wifiModelCounts: [String: Int] = [:]
+        for w in wifi {
+            if let m = normalizedModelName(w.modelName ?? w.name) { wifiModelCounts[m, default: 0] += 1 }
+        }
+        // Count each physical Wi-Fi device once (HTTP and HTTPS adverts of one printer are one device).
+        var deviceKeys: [String: Set<String>] = [:]
+        for w in wifi {
+            if let m = normalizedModelName(w.modelName ?? w.name) {
+                deviceKeys[m, default: []].insert(normalizedKey(w.uuid) ?? normalizedKey(w.name) ?? w.id)
+            }
+        }
+        for (m, keys) in deviceKeys { wifiModelCounts[m] = keys.count }
+        var usbModelCounts: [String: Int] = [:]
+        if let m = normalizedModelName(usb.modelName ?? usb.name) { usbModelCounts[m] = 1 }
+
+        let matches = wifi.filter {
+            isSamePhysicalScanner(usb: usb, wifi: $0, usbModelCounts: usbModelCounts, wifiModelCounts: wifiModelCounts)
+        }
+        return matches.reduce(nil as DiscoveredScanner?) { best, candidate in
+            guard let best else { return candidate }
+            return shouldPrefer(candidate, over: best) ? candidate : best
+        }
     }
 
     private static func shouldPrefer(_ candidate: DiscoveredScanner, over existing: DiscoveredScanner) -> Bool {
@@ -246,6 +281,10 @@ final class CompositeScannerBrowser: ScannerBrowserProtocol {
     func stop() {
         bonjourBrowser.stop()
         usbBrowser.stop()
+    }
+
+    func networkCounterpart(for scanner: DiscoveredScanner) -> DiscoveredScanner? {
+        ScannerDeduplicator.networkCounterpart(for: scanner, among: bonjourScanners)
     }
 
     func addManualScanner(host: String, port: Int, useTLS: Bool, rootPath: String = "eSCL") {
