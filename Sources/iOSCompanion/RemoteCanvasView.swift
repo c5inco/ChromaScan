@@ -12,6 +12,7 @@ struct RemoteCanvasView: UIViewRepresentable {
     let showCropOverlay: Bool
     let cropRect: NormalizedCropRect
     let rotation: ScanRotation
+    let topContentPadding: CGFloat
     let onCropChanged: (_ rect: NormalizedCropRect, _ isFinal: Bool) -> Void
     let onRequestTile: (_ normalizedRect: NormalizedCropRect, _ maxPixelWidth: Int) -> Void
     let onClearTile: () -> Void
@@ -36,7 +37,8 @@ struct RemoteCanvasView: UIViewRepresentable {
             isLoadingTile: isLoadingTile,
             showCropOverlay: showCropOverlay,
             cropRect: cropRect,
-            rotation: rotation
+            rotation: rotation,
+            topContentPadding: topContentPadding
         )
     }
 }
@@ -44,7 +46,7 @@ struct RemoteCanvasView: UIViewRepresentable {
 // MARK: - UIKit Scroll + Tile + Touch Crop Container
 
 @MainActor
-final class RemoteCanvasUIView: UIView, UIScrollViewDelegate {
+final class RemoteCanvasUIView: UIView, UIScrollViewDelegate, UIGestureRecognizerDelegate {
     var onCropChanged: ((_ rect: NormalizedCropRect, _ isFinal: Bool) -> Void)?
     var onRequestTile: ((_ normalizedRect: NormalizedCropRect, _ maxPixelWidth: Int) -> Void)?
     var onClearTile: (() -> Void)?
@@ -55,10 +57,18 @@ final class RemoteCanvasUIView: UIView, UIScrollViewDelegate {
     private let tileImageView = UIImageView()
     private let cropOverlay = TouchCropOverlayView()
     private let zoomBadge = UILabel()
+    private lazy var cropPanGesture: UIPanGestureRecognizer = {
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleCropPan(_:)))
+        pan.minimumNumberOfTouches = 1
+        pan.maximumNumberOfTouches = 1
+        pan.delegate = self
+        return pan
+    }()
 
     private var currentImage: UIImage?
     private var truePixelSize: CGSize = .zero
     private var showCropOverlay: Bool = true
+    private var topContentPadding: CGFloat = 68
     private var lastBaseImageSize: CGSize = .zero
     private var lastLayoutBounds: CGSize = .zero
     private var settleWorkItem: DispatchWorkItem?
@@ -103,10 +113,16 @@ final class RemoteCanvasUIView: UIView, UIScrollViewDelegate {
         tileImageView.isHidden = true
         pageContainer.addSubview(tileImageView)
 
+        cropOverlay.isUserInteractionEnabled = false
         cropOverlay.onCropChanged = { [weak self] rect, isFinal in
             self?.onCropChanged?(rect, isFinal)
         }
         addSubview(cropOverlay)
+
+        // Attach single-finger crop pan directly to scrollView so 2-finger pinch-to-zoom
+        // and double-tap zoom always reach scrollView even inside a trimmed marquee.
+        scrollView.addGestureRecognizer(cropPanGesture)
+        scrollView.panGestureRecognizer.require(toFail: cropPanGesture)
 
         zoomBadge.font = UIFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
         zoomBadge.textColor = .white
@@ -149,15 +165,18 @@ final class RemoteCanvasUIView: UIView, UIScrollViewDelegate {
         isLoadingTile: Bool,
         showCropOverlay: Bool,
         cropRect: NormalizedCropRect,
-        rotation: ScanRotation
+        rotation: ScanRotation,
+        topContentPadding: CGFloat
     ) {
         let imageChanged = (image !== currentImage)
         let imageAspectChanged = image?.size != lastBaseImageSize
         let modeChanged = (showCropOverlay != self.showCropOverlay)
+        let paddingChanged = abs(topContentPadding - self.topContentPadding) > 0.5
 
         self.currentImage = image
         self.truePixelSize = truePixelSize
         self.showCropOverlay = showCropOverlay
+        self.topContentPadding = topContentPadding
 
         proxyImageView.image = image
         pageContainer.isHidden = (image == nil)
@@ -167,7 +186,7 @@ final class RemoteCanvasUIView: UIView, UIScrollViewDelegate {
             cropOverlay.cropRect = cropRect
         }
 
-        if imageChanged || imageAspectChanged || modeChanged {
+        if imageChanged || imageAspectChanged || modeChanged || paddingChanged {
             lastBaseImageSize = image?.size ?? .zero
             relayoutPage(resetZoom: imageAspectChanged || modeChanged)
         } else {
@@ -206,7 +225,7 @@ final class RemoteCanvasUIView: UIView, UIScrollViewDelegate {
             return
         }
 
-        let topPadding: CGFloat = 104
+        let topPadding = topContentPadding
         let sidePadding: CGFloat = 18
         let bottomPadding: CGFloat = 18
         let availW = max(1, bounds.width - sidePadding * 2)
@@ -225,7 +244,7 @@ final class RemoteCanvasUIView: UIView, UIScrollViewDelegate {
         if !resetZoom {
             scrollView.zoomScale = min(scrollView.maximumZoomScale, max(1.0, previousZoom))
         }
-        centerContent()
+        centerContent(resetOffsetIfUnzoomed: resetZoom || scrollView.zoomScale <= 1.02)
         syncCropOverlayPageFrame()
     }
 
@@ -237,14 +256,17 @@ final class RemoteCanvasUIView: UIView, UIScrollViewDelegate {
         scrollView.maximumZoomScale = max(4.0, min(28.0, oneToOneScale * 3.0))
     }
 
-    private func centerContent() {
+    private func centerContent(resetOffsetIfUnzoomed: Bool = false) {
         let offsetX = max((scrollView.bounds.width - scrollView.contentSize.width) * 0.5, 0)
         if scrollView.zoomScale <= 1.02 {
-            let topPad: CGFloat = 104
+            let topPad = topContentPadding
             let bottomPad: CGFloat = 18
             let availH = max(0, scrollView.bounds.height - topPad - bottomPad)
             let extra = max(0, (availH - scrollView.contentSize.height) * 0.5)
             scrollView.contentInset = UIEdgeInsets(top: topPad + extra, left: offsetX, bottom: bottomPad + extra, right: offsetX)
+            if resetOffsetIfUnzoomed {
+                scrollView.contentOffset = CGPoint(x: -scrollView.contentInset.left, y: -scrollView.contentInset.top)
+            }
         } else {
             let offsetY = max((scrollView.bounds.height - scrollView.contentSize.height) * 0.5, 0)
             scrollView.contentInset = UIEdgeInsets(top: offsetY, left: offsetX, bottom: offsetY, right: offsetX)
@@ -260,6 +282,29 @@ final class RemoteCanvasUIView: UIView, UIScrollViewDelegate {
     }
 
     // MARK: - Gestures & UIScrollViewDelegate
+
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let pan = gestureRecognizer as? UIPanGestureRecognizer, pan === cropPanGesture else {
+            return super.gestureRecognizerShouldBegin(gestureRecognizer)
+        }
+        guard !cropOverlay.isHidden,
+              cropOverlay.pageFrame.width > 10,
+              cropOverlay.pageFrame.height > 10,
+              pan.numberOfTouches == 1 else {
+            return false
+        }
+        let loc = pan.location(in: cropOverlay)
+        let trans = pan.translation(in: cropOverlay)
+        let startPt = CGPoint(x: loc.x - trans.x, y: loc.y - trans.y)
+        // Always allow dragging any of the 8 crop handles (even while zoomed in).
+        // Only allow moving the trimmed marquee with 1 finger when unzoomed, so zoomed
+        // 1-finger panning and 2-finger pinch-to-zoom work freely inside the trimmed box.
+        return cropOverlay.canBeginDrag(at: startPt, allowMove: scrollView.zoomScale <= 1.02)
+    }
+
+    @objc private func handleCropPan(_ gesture: UIPanGestureRecognizer) {
+        cropOverlay.handleExternalPan(gesture, allowMove: scrollView.zoomScale <= 1.02)
+    }
 
     @objc private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
         guard currentImage != nil else { return }
@@ -444,26 +489,60 @@ private final class TouchCropOverlayView: UIView {
         super.init(frame: frame)
         backgroundColor = .clear
         isOpaque = false
-        let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
-        pan.maximumNumberOfTouches = 1
-        addGestureRecognizer(pan)
+        isUserInteractionEnabled = false
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
-    /// Pass touches outside handles / movable sub-crop straight through to `UIScrollView` so pinch & pan work freely.
-    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+    func canBeginDrag(at point: CGPoint, allowMove: Bool) -> Bool {
         guard !isHidden, pageFrame.width > 10, pageFrame.height > 10 else { return false }
         let selRect = currentSelectionRect()
         if hitTestHandle(at: point, selRect: selRect) != nil {
             return true
         }
-        if !cropRect.isFull && selRect.contains(point) {
+        if allowMove && !cropRect.isFull && selRect.contains(point) {
             return true
         }
         return false
+    }
+
+    func handleExternalPan(_ gesture: UIPanGestureRecognizer, allowMove: Bool) {
+        guard pageFrame.width > 10, pageFrame.height > 10 else { return }
+        let pt = gesture.location(in: self)
+
+        switch gesture.state {
+        case .began:
+            let trans = gesture.translation(in: self)
+            let startPt = CGPoint(x: pt.x - trans.x, y: pt.y - trans.y)
+            let selRect = currentSelectionRect()
+            let displayNorm = cropRect.physicalToDisplay(rotation: rotation)
+            if let handle = hitTestHandle(at: startPt, selRect: selRect) {
+                dragMode = .resize(handle: handle, startPoint: startPt, initialDisplayRect: displayNorm)
+            } else if allowMove && !cropRect.isFull && selRect.contains(startPt) {
+                dragMode = .move(startPoint: startPt, initialDisplayRect: displayNorm)
+            } else {
+                dragMode = .none
+            }
+            applyDrag(to: pt, isFinal: false)
+            setNeedsDisplay()
+
+        case .changed:
+            applyDrag(to: pt, isFinal: false)
+
+        case .ended:
+            applyDrag(to: pt, isFinal: true)
+            dragMode = .none
+            setNeedsDisplay()
+
+        case .cancelled, .failed:
+            dragMode = .none
+            setNeedsDisplay()
+
+        default:
+            break
+        }
     }
 
     private func currentSelectionRect() -> CGRect {
@@ -501,36 +580,6 @@ private final class TouchCropOverlayView: UIView {
             }
         }
         return best?.0
-    }
-
-    @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
-        guard pageFrame.width > 10, pageFrame.height > 10 else { return }
-        let pt = gesture.location(in: self)
-
-        switch gesture.state {
-        case .began:
-            let selRect = currentSelectionRect()
-            let displayNorm = cropRect.physicalToDisplay(rotation: rotation)
-            if let handle = hitTestHandle(at: pt, selRect: selRect) {
-                dragMode = .resize(handle: handle, startPoint: pt, initialDisplayRect: displayNorm)
-            } else if !cropRect.isFull && selRect.contains(pt) {
-                dragMode = .move(startPoint: pt, initialDisplayRect: displayNorm)
-            } else {
-                dragMode = .none
-            }
-            setNeedsDisplay()
-
-        case .changed:
-            applyDrag(to: pt, isFinal: false)
-
-        case .ended, .cancelled, .failed:
-            applyDrag(to: pt, isFinal: true)
-            dragMode = .none
-            setNeedsDisplay()
-
-        default:
-            break
-        }
     }
 
     private func applyDrag(to pt: CGPoint, isFinal: Bool) {

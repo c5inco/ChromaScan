@@ -8,6 +8,7 @@ struct RemoteWorkspaceView: View {
     @State private var showDisconnectConfirm = false
     @State private var showRenameAlert = false
     @State private var renameDraft = ""
+    @State private var topPillHeight: CGFloat = 42
 
     var body: some View {
         VStack(spacing: 0) {
@@ -130,6 +131,10 @@ struct RemoteWorkspaceView: View {
                     return .zero
                 }()
 
+                let hasTopPill = !store.topStatusPrimaryLine.isEmpty || !store.topStatusSecondaryLine.isEmpty
+                let hasTopChips = store.showsTrimChip || store.showsFullPageChip
+                let canvasTopPadding: CGFloat = (hasTopPill ? (10 + topPillHeight) : 0) + (hasTopChips ? 32 : 0) + 18
+
                 if let img = store.proxyImage {
                     RemoteCanvasView(
                         image: img,
@@ -140,6 +145,7 @@ struct RemoteWorkspaceView: View {
                         showCropOverlay: !showingScan,
                         cropRect: snap.cropRect,
                         rotation: snap.settings.rotation,
+                        topContentPadding: canvasTopPadding,
                         onCropChanged: { rect, isFinal in
                             store.setCropRect(rect, immediate: isFinal)
                         },
@@ -152,11 +158,12 @@ struct RemoteWorkspaceView: View {
                     )
                 } else {
                     emptyCanvasView(showingScan: showingScan, snap: snap)
+                        .padding(.top, max(0, canvasTopPadding - 18))
                 }
 
                 // Floating centered consolidated live + measurements chip (with settings trigger), Trim / Full Page chips & bottom toast
                 VStack(spacing: 6) {
-                    if !store.topStatusPrimaryLine.isEmpty || !store.topStatusSecondaryLine.isEmpty {
+                    if hasTopPill {
                         Button {
                             showControlsSheet = true
                         } label: {
@@ -192,12 +199,17 @@ struct RemoteWorkspaceView: View {
                                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                                     .strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
                             )
+                            .background(
+                                GeometryReader { geo in
+                                    Color.clear.preference(key: TopPillHeightPreferenceKey.self, value: geo.size.height)
+                                }
+                            )
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Scan Controls. \(store.topStatusPrimaryLine). \(store.topStatusSecondaryLine)")
                     }
 
-                    if store.showsTrimChip || store.showsFullPageChip {
+                    if hasTopChips {
                         HStack(spacing: 8) {
                             if store.showsTrimChip {
                                 Button {
@@ -227,6 +239,7 @@ struct RemoteWorkspaceView: View {
                                 .transition(.opacity.combined(with: .scale(scale: 0.92)))
                             }
                         }
+                        .transition(.opacity.combined(with: .scale(scale: 0.92)))
                     }
 
                     Spacer()
@@ -244,6 +257,11 @@ struct RemoteWorkspaceView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.top, 10)
+                .onPreferenceChange(TopPillHeightPreferenceKey.self) { height in
+                    if height > 1, abs(height - topPillHeight) > 0.5 {
+                        topPillHeight = height
+                    }
+                }
                 .animation(.easeInOut(duration: 0.2), value: store.toastMessage)
                 .animation(.easeInOut(duration: 0.2), value: store.showsTrimChip)
                 .animation(.easeInOut(duration: 0.2), value: store.showsFullPageChip)
@@ -464,6 +482,14 @@ struct RemoteWorkspaceView: View {
             }
             return "No Scanner Selected"
         }
+    }
+}
+
+private struct TopPillHeightPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        let next = nextValue()
+        if next > 0 { value = next }
     }
 }
 
