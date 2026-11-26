@@ -185,17 +185,17 @@ final class StatusFooterView: NSView {
         hasImage: Bool,
         isCropFull: Bool,
         isScanTrimmed: Bool,
+        isTrimHiddenAfterTrim: Bool = false,
         isBusy: Bool
     ) {
-        if showingScan {
-            trimEmptySpaceButton.isHidden = !hasImage
-            trimEmptySpaceButton.isEnabled = hasImage && !isBusy && !isScanTrimmed
+        if showingScan || isBusy {
+            trimEmptySpaceButton.isHidden = true
             fullPageButton.isHidden = true
         } else {
-            trimEmptySpaceButton.isHidden = !hasImage
-            trimEmptySpaceButton.isEnabled = hasImage && !isBusy
-            fullPageButton.isHidden = false
-            fullPageButton.isEnabled = !isCropFull && !isBusy
+            trimEmptySpaceButton.isHidden = !hasImage || isTrimHiddenAfterTrim
+            trimEmptySpaceButton.isEnabled = hasImage
+            fullPageButton.isHidden = !hasImage || isCropFull
+            fullPageButton.isEnabled = !isCropFull
         }
     }
 
@@ -213,7 +213,7 @@ final class StatusFooterView: NSView {
         nf.numberStyle = .decimal
         let pw = nf.string(from: NSNumber(value: pixelWidth)) ?? "\(pixelWidth)"
         let ph = nf.string(from: NSNumber(value: pixelHeight)) ?? "\(pixelHeight)"
-        dimensionsLabel.stringValue = String(format: "%.2f\"×%.2f\" · %@×%@ (%@ raw)", widthInches, heightInches, pw, ph, sizeStr)
+        dimensionsLabel.stringValue = String(format: "%.2f\"×%.2f\" · %@×%@ (%@)", widthInches, heightInches, pw, ph, sizeStr)
     }
 
     func updateScanDimensions(pixelWidth: Int, pixelHeight: Int, dpi: Int, profileName: String, isTrimmed: Bool = false) {

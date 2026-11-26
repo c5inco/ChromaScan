@@ -28,6 +28,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSMenuI
 
     private var tileRenderTask: Task<Void, Never>?
     private var lastViewMode: CanvasViewMode = .preview
+    private var isTrimHiddenAfterTrim: Bool = false
+    private var lastCropWasFull: Bool = true
+    private var lastWasPreviewBusy: Bool = false
 
     var onMenuBarModeChanged: ((Bool) -> Void)? {
         didSet { companionPopoverVC.onMenuBarModeChanged = onMenuBarModeChanged }
@@ -119,7 +122,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSMenuI
         }
 
         canvasVC.canvasView.onCropChanged = { [weak self] rect in
-            self?.engine.setCropRect(rect)
+            guard let self else { return }
+            if rect.clamped() != self.engine.cropRect {
+                self.isTrimHiddenAfterTrim = false
+            }
+            self.engine.setCropRect(rect)
         }
 
         canvasVC.canvasView.onZoomChanged = { [weak self] scale, isFit in
@@ -319,7 +326,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSMenuI
         case .fullScanImageReady:
             refreshHighResOverlayTile()
 
-        case .progress(_, let bytesReceived, let expectedBytes, _, let statusText):
+        case .progress(_, let bytesReceived, let expectedBytes, _, let statusText, _):
             let frac: Double? = expectedBytes > 0 ? min(1.0, Double(bytesReceived) / Double(expectedBytes)) : nil
             canvasVC.footerView.setProgress(status: statusText, fraction: frac)
 
@@ -359,11 +366,22 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSMenuI
         }
 
         let hasImageForMode = showingScan ? snapshot.hasScanImage : snapshot.hasPreviewImage
+        if !showingScan {
+            let returnedToFullPage = !lastCropWasFull && snapshot.cropRect.isFull
+            let freshPreviewCompleted = lastWasPreviewBusy && !snapshot.isBusy && snapshot.hasPreviewImage
+            if returnedToFullPage || freshPreviewCompleted {
+                isTrimHiddenAfterTrim = false
+            }
+        }
+        lastCropWasFull = snapshot.cropRect.isFull
+        lastWasPreviewBusy = snapshot.isBusy && snapshot.activeOperation == .preview
+
         canvasVC.footerView.updateTrimControls(
             showingScan: showingScan,
             hasImage: hasImageForMode,
             isCropFull: snapshot.cropRect.isFull,
             isScanTrimmed: snapshot.isScanTrimmed,
+            isTrimHiddenAfterTrim: isTrimHiddenAfterTrim,
             isBusy: snapshot.isBusy
         )
         if !hasImageForMode {
@@ -477,12 +495,25 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSMenuI
     }
 
     @objc func resetCrop() {
+        isTrimHiddenAfterTrim = false
         engine.resetCrop()
     }
 
     @objc func trimEmptySpaceClicked() {
         if window?.firstResponder is NSTextView {
             window?.makeFirstResponder(canvasVC.canvasView)
+        }
+        if engine.viewMode == .preview {
+            isTrimHiddenAfterTrim = true
+            let snap = engine.makeSnapshot()
+            canvasVC.footerView.updateTrimControls(
+                showingScan: false,
+                hasImage: snap.hasPreviewImage,
+                isCropFull: snap.cropRect.isFull,
+                isScanTrimmed: snap.isScanTrimmed,
+                isTrimHiddenAfterTrim: true,
+                isBusy: snap.isBusy
+            )
         }
         engine.trimEmptySpace()
     }
