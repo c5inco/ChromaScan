@@ -101,8 +101,11 @@ final class ScanSessionEngine {
 
     /// The HP OfficeJet 3830 can get stuck in a printer-side USB slow mode (~0.19 MB/s instead of
     /// ~1.6 MB/s) that only a printer power cycle clears; Wi-Fi is unaffected. Flag raw USB scans at
-    /// ≥300 DPI that have streamed for ≥15 s at under 0.5 MB/s. Previews (100 DPI, scan-head bound)
+    /// ≥300 DPI that have streamed for ≥8 s at under 0.5 MB/s (the rate is steady, so 8 s is plenty
+    /// and users tend to cancel a visibly slow scan within ~10–15 s). Previews (100 DPI, scan-head bound)
     /// and JPEG transfers are normally slow, so they are excluded.
+    nonisolated static let slowUSBMinStreamingSeconds: Double = 8
+
     nonisolated static func isSlowUSBTransfer(
         transport: ScannerTransport,
         isPreview: Bool,
@@ -112,7 +115,7 @@ final class ScanSessionEngine {
         streamingSeconds: Double
     ) -> Bool {
         guard transport == .usb, !isPreview, resolution >= 300,
-              transferFormat == .rawOctetStream, streamingSeconds >= 15 else { return false }
+              transferFormat == .rawOctetStream, streamingSeconds >= slowUSBMinStreamingSeconds else { return false }
         let mbPerSecond = Double(bytesReceived) / 1e6 / streamingSeconds
         return mbPerSecond < 0.5
     }

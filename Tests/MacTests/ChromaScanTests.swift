@@ -480,10 +480,12 @@ final class ChromaScanTests: XCTestCase {
         // Stuck printer-side USB mode: ~0.19 MB/s
         XCTAssertTrue(check(mb: 3.8, seconds: 20))
         XCTAssertTrue(check(dpi: 300, mb: 3.4, seconds: 18))
+        XCTAssertTrue(check(mb: 1.6, seconds: 8))   // detected after 8 s of streaming
         // Normal USB speed (~1.6–1.7 MB/s)
         XCTAssertFalse(check(mb: 34, seconds: 20))
         // Too early to judge
         XCTAssertFalse(check(mb: 1.0, seconds: 5))
+        XCTAssertFalse(check(mb: 1.4, seconds: 7.9))
         // Excluded: Wi-Fi (normally ~0.3 MB/s), previews, low DPI, JPEG transfers
         XCTAssertFalse(check(.wifi, mb: 6, seconds: 20))
         XCTAssertFalse(check(preview: true, dpi: 100, mb: 3, seconds: 16))
