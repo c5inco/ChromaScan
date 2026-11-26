@@ -17,7 +17,8 @@ enum SessionEngineEvent: Sendable {
         bytesReceived: Int64,
         expectedBytes: Int64,
         elapsedSeconds: Double,
-        statusText: String
+        statusText: String,
+        estimatedRemainingSeconds: Double? = nil
     )
     case scanCompleted(
         url: URL,
@@ -95,6 +96,7 @@ final class ScanSessionEngine {
     /// When image data first arrived for the active capture (for the slow-USB check).
     private var captureFirstByteTime: CFAbsoluteTime?
     private var captureSlowUSBWarned = false
+    private var captureSpeedEstimator = ScanTransferSpeedEstimator()
 
     /// Hint appended to the progress status when a USB transfer is stuck far below normal speed.
     static let slowUSBHint = "USB unusually slow — power-cycle the printer or use Wi-Fi"
@@ -812,17 +814,22 @@ final class ScanSessionEngine {
             let attempt = DownloadAttempt()
             captureFirstByteTime = nil
             captureSlowUSBWarned = false
+            captureSpeedEstimator.reset()
 
             let client = self.client
             attempt.task = Task {
                 try await client.performScan(scanner: attemptScanner, request: request) { [weak self] recv, expected in
-                    let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+                    let now = CFAbsoluteTimeGetCurrent()
+                    let elapsed = now - startTime
                     Task { @MainActor [weak self] in
                         guard let self, self.isBusy, self.captureID == captureID,
                               !attempt.switchToNetworkRequested else { return }
                         self.captureBytesReceived = max(self.captureBytesReceived, recv)
                         if recv > 0, self.captureFirstByteTime == nil {
-                            self.captureFirstByteTime = CFAbsoluteTimeGetCurrent()
+                            self.captureFirstByteTime = now
+                        }
+                        if recv > 0 {
+                            self.captureSpeedEstimator.record(bytesReceived: recv, at: now)
                         }
                         if !self.captureSlowUSBWarned, let first = self.captureFirstByteTime,
                            Self.isSlowUSBTransfer(
@@ -831,10 +838,10 @@ final class ScanSessionEngine {
                                resolution: resolution,
                                transferFormat: request.transferFormat,
                                bytesReceived: recv,
-                               streamingSeconds: CFAbsoluteTimeGetCurrent() - first
+                               streamingSeconds: now - first
                            ) {
                             self.captureSlowUSBWarned = true
-                            let streamed = CFAbsoluteTimeGetCurrent() - first
+                            let streamed = now - first
                             if let target = fallbackTarget {
                                 transferLog.notice("SLOW-USB detected: \(Double(recv) / 1e6, format: .fixed(precision: 1)) MB in \(streamed, format: .fixed(precision: 0))s — switching to network endpoint \(target.host, privacy: .public):\(target.port)")
                                 attempt.switchToNetworkRequested = true
@@ -843,11 +850,20 @@ final class ScanSessionEngine {
                             }
                             transferLog.notice("SLOW-USB detected: \(Double(recv) / 1e6, format: .fixed(precision: 1)) MB in \(streamed, format: .fixed(precision: 0))s — no network endpoint, showing power-cycle hint")
                         }
+                        let eta = self.captureSpeedEstimator.estimatedRemainingSeconds(
+                            bytesReceived: recv,
+                            expectedBytes: expected
+                        )
                         let recvMB = Double(recv) / (1024.0 * 1024.0)
                         var status: String
                         if expected > 0 {
                             let expMB = Double(expected) / (1024.0 * 1024.0)
-                            status = String(format: "%@ · %.1f / %.1f MB (%.0fs)", labelPrefix, recvMB, expMB, elapsed)
+                            if let eta {
+                                let etaStr = ScanLiveActivityContentState.formatRemainingSeconds(eta)
+                                status = String(format: "%@ · %.1f / %.1f MB · %@", labelPrefix, recvMB, expMB, etaStr)
+                            } else {
+                                status = String(format: "%@ · %.1f / %.1f MB (%.0fs)", labelPrefix, recvMB, expMB, elapsed)
+                            }
                         } else {
                             status = String(format: "%@ · %.1f MB (%.0fs)", labelPrefix, recvMB, elapsed)
                         }
@@ -857,7 +873,14 @@ final class ScanSessionEngine {
                             status += " · " + Self.slowUSBHint
                         }
                         self.statusText = status
-                        self.emit(.progress(operation: op, bytesReceived: recv, expectedBytes: expected, elapsedSeconds: elapsed, statusText: status))
+                        self.emit(.progress(
+                            operation: op,
+                            bytesReceived: recv,
+                            expectedBytes: expected,
+                            elapsedSeconds: elapsed,
+                            statusText: status,
+                            estimatedRemainingSeconds: eta
+                        ))
                     }
                 }
             }
@@ -1320,7 +1343,7 @@ final class ScanSessionEngine {
                 let rawMB = Double(fullBounds.width * fullBounds.height * fullBuf.colorMode.bytesPerPixel) / (1024.0 * 1024.0)
                 let fmtSuffix = captured.outputFormat.supportsQuality
                     ? "\(captured.outputFormat.displayName) (compression preview off)"
-                    : "\(captured.outputFormat.displayName) · ~\(Int(rawMB.rounded())) MB raw"
+                    : "\(captured.outputFormat.displayName) · ~\(Int(rawMB.rounded())) MB"
                 summary = "Live: \(profileLabel) · \(fmtSuffix)"
             }
 
@@ -1559,5 +1582,70 @@ final class ScanSessionEngine {
         self.fullScanRenderSignature = nil
         self.broadcastSnapshot()
         self.reRenderActiveView()
+    }
+}
+
+/// Rolling-window throughput estimator that ignores initial scanner warm-up delay and predicts
+/// remaining transfer time once sustained image bytes are streaming.
+struct ScanTransferSpeedEstimator: Sendable {
+    private struct Sample: Sendable {
+        let time: Double
+        let bytes: Int64
+    }
+
+    let windowSeconds: Double
+    let minStreamingSeconds: Double
+    let minSampleInterval: Double
+    private var samples: [Sample] = []
+
+    init(
+        windowSeconds: Double = 10.0,
+        minStreamingSeconds: Double = 1.5,
+        minSampleInterval: Double = 0.2
+    ) {
+        self.windowSeconds = windowSeconds
+        self.minStreamingSeconds = minStreamingSeconds
+        self.minSampleInterval = minSampleInterval
+    }
+
+    mutating func reset() {
+        samples.removeAll(keepingCapacity: true)
+    }
+
+    mutating func record(bytesReceived: Int64, at timestamp: Double) {
+        guard bytesReceived > 0 else { return }
+        if let last = samples.last {
+            if timestamp <= last.time {
+                if bytesReceived > last.bytes {
+                    samples[samples.count - 1] = Sample(time: last.time, bytes: bytesReceived)
+                }
+                return
+            }
+            if timestamp - last.time < minSampleInterval && samples.count >= 2 {
+                samples[samples.count - 1] = Sample(time: timestamp, bytes: max(last.bytes, bytesReceived))
+            } else {
+                samples.append(Sample(time: timestamp, bytes: max(last.bytes, bytesReceived)))
+            }
+        } else {
+            samples.append(Sample(time: timestamp, bytes: bytesReceived))
+        }
+
+        let cutoff = timestamp - windowSeconds
+        while samples.count > 2, samples[1].time <= cutoff {
+            samples.removeFirst()
+        }
+    }
+
+    func estimatedRemainingSeconds(bytesReceived: Int64, expectedBytes: Int64) -> Double? {
+        guard expectedBytes > 0, bytesReceived > 0, bytesReceived < expectedBytes else { return nil }
+        guard let first = samples.first, let last = samples.last else { return nil }
+        let dt = last.time - first.time
+        let dBytes = last.bytes - first.bytes
+        guard dt >= minStreamingSeconds, dBytes > 0 else { return nil }
+        let bytesPerSecond = Double(dBytes) / dt
+        guard bytesPerSecond.isFinite, bytesPerSecond > 0 else { return nil }
+        let remaining = Double(expectedBytes - bytesReceived) / bytesPerSecond
+        guard remaining.isFinite else { return nil }
+        return max(1.0, remaining)
     }
 }

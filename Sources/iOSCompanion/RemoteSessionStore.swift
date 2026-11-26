@@ -11,6 +11,23 @@ struct RemoteProgressState: Equatable, Sendable {
     let expectedBytes: Int64
     let elapsedSeconds: Double
     let statusText: String
+    let estimatedRemainingSeconds: Double?
+
+    init(
+        operation: CompanionOperation,
+        bytesReceived: Int64,
+        expectedBytes: Int64,
+        elapsedSeconds: Double,
+        statusText: String,
+        estimatedRemainingSeconds: Double? = nil
+    ) {
+        self.operation = operation
+        self.bytesReceived = bytesReceived
+        self.expectedBytes = expectedBytes
+        self.elapsedSeconds = elapsedSeconds
+        self.statusText = statusText
+        self.estimatedRemainingSeconds = estimatedRemainingSeconds
+    }
 
     var fraction: Double? {
         guard expectedBytes > 0 else { return nil }
@@ -69,6 +86,81 @@ final class RemoteSessionStore {
     private(set) var apnsRegistrationError: String?
     private(set) var hostAPNsConfigured: Bool = false
     private(set) var isAppInBackground: Bool = false
+    private(set) var isTrimChipHidden: Bool = false
+
+    var showsTrimChip: Bool {
+        guard let snap = snapshot, !snap.isBusy, snap.viewMode == .preview, snap.hasPreviewImage, proxyImage != nil else {
+            return false
+        }
+        return !isTrimChipHidden
+    }
+
+    var showsFullPageChip: Bool {
+        guard let snap = snapshot, !snap.isBusy, snap.viewMode == .preview, snap.hasPreviewImage, proxyImage != nil else {
+            return false
+        }
+        return !snap.cropRect.isFull
+    }
+
+    var effectiveOutputFilename: String {
+        guard let snap = snapshot else { return "" }
+        let trimmed = snap.settings.baseFilename.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stem = trimmed.isEmpty ? "scan" : trimmed
+        return "\(stem).\(snap.settings.outputFormat.fileExtension)"
+    }
+
+    var topStatusPrimaryLine: String {
+        guard let snap = snapshot else { return "" }
+        if snap.viewMode == .scan,
+           let w = snap.scanPixelWidth,
+           let h = snap.scanPixelHeight,
+           let dpi = snap.scanDPI {
+            let nf = NumberFormatter()
+            nf.numberStyle = .decimal
+            let pw = nf.string(from: NSNumber(value: w)) ?? "\(w)"
+            let ph = nf.string(from: NSNumber(value: h)) ?? "\(h)"
+            let trimSuffix = snap.isScanTrimmed ? " · Trimmed" : ""
+            return "\(pw)×\(ph) px · \(dpi) DPI\(trimSuffix)"
+        }
+        return plannedCaptureReadout
+    }
+
+    var topStatusSecondaryLine: String {
+        guard let snap = snapshot else { return "" }
+        let profile = snap.settings.colorMode == .grayscale8
+            ? "Grayscale"
+            : snap.settings.colorProfile.shortName
+        let fmt = snap.settings.outputFormat
+        let dpiPrefix = (snap.viewMode == .scan && snap.scanDPI != nil) ? "" : "\(snap.settings.resolution) DPI · "
+        if fmt.supportsQuality {
+            let qPct = Int((snap.settings.quality * 100).rounded())
+            if snap.settings.previewCompressionEnabled,
+               let estSize = Self.extractEstimatedLossySize(from: snap.outputPreviewSummary) {
+                return "\(dpiPrefix)\(profile) · \(fmt.displayName) \(qPct)% · \(estSize)"
+            }
+            return "\(dpiPrefix)\(profile) · \(fmt.displayName) \(qPct)%"
+        }
+        return "\(dpiPrefix)\(profile) · \(fmt.displayName)"
+    }
+
+    nonisolated static func extractEstimatedLossySize(from summary: String) -> String? {
+        guard let open = summary.lastIndex(of: "("),
+              let close = summary.lastIndex(of: ")"),
+              open < close else { return nil }
+        let inside = summary[summary.index(after: open)..<close]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard inside.hasSuffix("est.") else { return nil }
+        return inside
+    }
+
+    nonisolated static func sanitizedBaseFilename(_ raw: String, format: OutputFormat) -> String {
+        var clean = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let dotExt = ".\(format.fileExtension)"
+        if clean.count > dotExt.count && clean.lowercased().hasSuffix(dotExt.lowercased()) {
+            clean = String(clean.dropLast(dotExt.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return clean
+    }
 
     var isDirectAPNsActive: Bool {
         notifyOnScanComplete
@@ -255,6 +347,7 @@ final class RemoteSessionStore {
         snapshot = nil
         progress = nil
         hostAPNsConfigured = false
+        isTrimChipHidden = false
         resetSessionImages()
         browser.start()
     }
@@ -398,7 +491,8 @@ final class RemoteSessionStore {
             initialState = ScanLiveActivityContentState.fromProgress(
                 bytesReceived: progress.bytesReceived,
                 expectedBytes: progress.expectedBytes,
-                statusText: progress.statusText
+                statusText: progress.statusText,
+                estimatedRemainingSeconds: progress.estimatedRemainingSeconds
             )
         } else {
             initialState = ScanLiveActivityContentState(
@@ -522,6 +616,9 @@ final class RemoteSessionStore {
     func setCropRect(_ rect: NormalizedCropRect, immediate: Bool = false) {
         let clamped = rect.clamped()
         if let snap = snapshot {
+            if clamped != snap.cropRect {
+                isTrimChipHidden = false
+            }
             snapshot = SessionSnapshot(
                 scanners: snap.scanners,
                 selectedScannerID: snap.selectedScannerID,
@@ -571,11 +668,14 @@ final class RemoteSessionStore {
     }
 
     func resetCrop() {
+        isTrimChipHidden = false
         setCropRect(.full, immediate: true)
     }
 
     func trimEmptySpace() {
-        if snapshot?.viewMode == .scan {
+        if snapshot?.viewMode == .preview {
+            isTrimChipHidden = true
+        } else if snapshot?.viewMode == .scan {
             clearHighResTile()
         }
         client.send(.trimEmptySpace)
@@ -587,6 +687,7 @@ final class RemoteSessionStore {
     }
 
     func triggerPreview() {
+        isTrimChipHidden = false
         client.send(.triggerPreview)
     }
 
@@ -679,7 +780,7 @@ final class RemoteSessionStore {
         nf.numberStyle = .decimal
         let pw = nf.string(from: NSNumber(value: pxW)) ?? "\(pxW)"
         let ph = nf.string(from: NSNumber(value: pxH)) ?? "\(pxH)"
-        return String(format: "%.2f\"×%.2f\" · %@×%@ (%@ raw)", wIn, hIn, pw, ph, sizeStr)
+        return String(format: "%.2f\"×%.2f\" · %@×%@ (%@)", wIn, hIn, pw, ph, sizeStr)
     }
 
     var activeOperationInfo: RemoteOperationDisplayInfo {
@@ -735,8 +836,13 @@ final class RemoteSessionStore {
             } else if progress.bytesReceived > 0 && progress.expectedBytes > 0 {
                 let recvStr = Self.formatMegabytes(progress.bytesReceived)
                 let expStr = Self.formatMegabytes(progress.expectedBytes)
-                let elapsedStr = Self.formatElapsedSeconds(progress.elapsedSeconds)
-                statusDetail = "\(recvStr) / \(expStr) · \(elapsedStr)"
+                if let remaining = progress.estimatedRemainingSeconds, remaining.isFinite, remaining > 0 {
+                    let etaStr = ScanLiveActivityContentState.formatRemainingSeconds(remaining)
+                    statusDetail = "\(recvStr) / \(expStr) · \(etaStr)"
+                } else {
+                    let elapsedStr = Self.formatElapsedSeconds(progress.elapsedSeconds)
+                    statusDetail = "\(recvStr) / \(expStr) · \(elapsedStr)"
+                }
                 let pct = Int(((fraction ?? 0) * 100.0).rounded())
                 trailingBadge = "\(pct)%"
             } else if progress.bytesReceived > 0 {
@@ -808,6 +914,7 @@ final class RemoteSessionStore {
         case .welcome(_, let hostID, let hostName, let authToken, let snap):
             client.saveAuthToken(authToken, hostID: hostID)
             phase = .connected(hostID: hostID, hostName: hostName)
+            isTrimChipHidden = false
             // Every (re)connect starts a fresh image stream: the host pushes its current proxy right
             // after welcome, and a relaunched host restarts its generation counter, so stale
             // `latestProxyGeneration` from a previous host process would drop every new frame.
@@ -830,13 +937,14 @@ final class RemoteSessionStore {
         case .snapshot(let snap):
             applyIncomingSnapshot(snap)
 
-        case .progress(let op, let recv, let exp, let elapsed, let text):
+        case .progress(let op, let recv, let exp, let elapsed, let text, let eta):
             let newProgress = RemoteProgressState(
                 operation: op,
                 bytesReceived: recv,
                 expectedBytes: exp,
                 elapsedSeconds: elapsed,
-                statusText: text
+                statusText: text,
+                estimatedRemainingSeconds: eta
             )
             progress = newProgress
             if op == .scan {
@@ -847,7 +955,8 @@ final class RemoteSessionStore {
                     let state = ScanLiveActivityContentState.fromProgress(
                         bytesReceived: recv,
                         expectedBytes: exp,
-                        statusText: text
+                        statusText: text,
+                        estimatedRemainingSeconds: eta
                     )
                     liveActivityManager.update(state)
                 }
@@ -943,10 +1052,20 @@ final class RemoteSessionStore {
     }
 
     private func applyIncomingSnapshot(_ snap: SessionSnapshot) {
+        let prev = snapshot
         let wasScanActive = isScanActive
-        let modeChanged = (snapshot?.viewMode != snap.viewMode)
-        let genChanged = (snapshot?.activeImageGeneration != snap.activeImageGeneration)
+        let modeChanged = (prev?.viewMode != snap.viewMode)
+        let genChanged = (prev?.activeImageGeneration != snap.activeImageGeneration)
         snapshot = snap
+
+        if snap.viewMode == .preview {
+            let returnedToFullPage = (prev != nil && !prev!.cropRect.isFull && snap.cropRect.isFull)
+            let firstPreviewArrived = (prev?.hasPreviewImage == false && snap.hasPreviewImage)
+            let freshPreviewFinished = (prev?.activeOperation == .preview && !snap.isBusy && snap.hasPreviewImage)
+            if returnedToFullPage || firstPreviewArrived || freshPreviewFinished {
+                isTrimChipHidden = false
+            }
+        }
 
         if !snap.isBusy {
             progress = nil

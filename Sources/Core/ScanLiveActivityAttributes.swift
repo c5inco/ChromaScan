@@ -21,6 +21,8 @@ struct ScanLiveActivityContentState: Codable, Hashable, Sendable {
     let expectedBytes: Int64
     let filename: String?
     let detailText: String?
+    /// Unix epoch timestamp (seconds since 1970) for predicted transfer completion, when speed is known.
+    let estimatedEndTimestamp: Double?
 
     init(
         phase: ScanLiveActivityPhase,
@@ -29,7 +31,8 @@ struct ScanLiveActivityContentState: Codable, Hashable, Sendable {
         bytesReceived: Int64 = 0,
         expectedBytes: Int64 = 0,
         filename: String? = nil,
-        detailText: String? = nil
+        detailText: String? = nil,
+        estimatedEndTimestamp: Double? = nil
     ) {
         self.phase = phase
         self.statusText = statusText
@@ -38,6 +41,7 @@ struct ScanLiveActivityContentState: Codable, Hashable, Sendable {
         self.expectedBytes = expectedBytes
         self.filename = filename
         self.detailText = detailText
+        self.estimatedEndTimestamp = estimatedEndTimestamp
     }
 
     var progressPercent: Int? {
@@ -49,10 +53,27 @@ struct ScanLiveActivityContentState: Codable, Hashable, Sendable {
         phase == .completed || phase == .failed
     }
 
+    static func formatRemainingSeconds(_ seconds: Double) -> String {
+        let total = max(1, Int(seconds.rounded()))
+        if total >= 3600 {
+            let hours = total / 3600
+            let mins = (total % 3600) / 60
+            return mins > 0 ? "~\(hours)h \(mins)m left" : "~\(hours)h left"
+        }
+        if total >= 60 {
+            let mins = total / 60
+            let secs = total % 60
+            return secs > 0 ? "~\(mins)m \(secs)s left" : "~\(mins)m left"
+        }
+        return "~\(total)s left"
+    }
+
     static func fromProgress(
         bytesReceived: Int64,
         expectedBytes: Int64,
-        statusText: String
+        statusText: String,
+        estimatedRemainingSeconds: Double? = nil,
+        now: Date = Date()
     ) -> ScanLiveActivityContentState {
         let trimmed = statusText.trimmingCharacters(in: .whitespacesAndNewlines)
         let isProcessing = trimmed.hasPrefix("Processing") || trimmed.hasPrefix("Rendering")
@@ -71,12 +92,22 @@ struct ScanLiveActivityContentState: Codable, Hashable, Sendable {
             let fraction = min(1.0, Double(bytesReceived) / Double(expectedBytes))
             let recvMB = Double(bytesReceived) / (1024.0 * 1024.0)
             let expMB = Double(expectedBytes) / (1024.0 * 1024.0)
+            let endTs: Double?
+            if let remaining = estimatedRemainingSeconds,
+               remaining.isFinite,
+               remaining > 0,
+               bytesReceived < expectedBytes {
+                endTs = now.timeIntervalSince1970 + remaining
+            } else {
+                endTs = nil
+            }
             return ScanLiveActivityContentState(
                 phase: .scanning,
                 statusText: String(format: "%.1f / %.1f MB", recvMB, expMB),
                 progress: fraction,
                 bytesReceived: bytesReceived,
-                expectedBytes: expectedBytes
+                expectedBytes: expectedBytes,
+                estimatedEndTimestamp: endTs
             )
         }
 

@@ -5,6 +5,9 @@ import SwiftUI
 #if canImport(AppKit)
 import AppKit
 #endif
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Shared ChromaScan darkroom palette derived from the watercolor poppy app icon:
 /// warm archival cold-press cream accent paired with vermilion poppy pigment.
@@ -34,5 +37,11 @@ enum ChromaTheme {
     static let creamNS = NSColor(srgbRed: creamRed, green: creamGreen, blue: creamBlue, alpha: 1.0)
     static let vermilionNS = NSColor(srgbRed: vermilionRed, green: vermilionGreen, blue: vermilionBlue, alpha: 1.0)
     static let inkNS = NSColor(srgbRed: inkRed, green: inkGreen, blue: inkBlue, alpha: 1.0)
+    #endif
+
+    #if canImport(UIKit)
+    static let creamUI = UIColor(red: creamRed, green: creamGreen, blue: creamBlue, alpha: 1.0)
+    static let vermilionUI = UIColor(red: vermilionRed, green: vermilionGreen, blue: vermilionBlue, alpha: 1.0)
+    static let inkUI = UIColor(red: inkRed, green: inkGreen, blue: inkBlue, alpha: 1.0)
     #endif
 }

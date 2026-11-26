@@ -6,6 +6,8 @@ struct RemoteWorkspaceView: View {
 
     @State private var showControlsSheet = false
     @State private var showDisconnectConfirm = false
+    @State private var showRenameAlert = false
+    @State private var renameDraft = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,6 +34,26 @@ struct RemoteWorkspaceView: View {
                 message: Text(err.message),
                 dismissButton: .default(Text("OK"))
             )
+        }
+        .alert("Rename Output File", isPresented: $showRenameAlert) {
+            TextField("scan-001", text: $renameDraft)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+            Button("Cancel", role: .cancel) {}
+            Button("Save") {
+                guard let snap = store.snapshot else { return }
+                let cleaned = RemoteSessionStore.sanitizedBaseFilename(
+                    renameDraft,
+                    format: snap.settings.outputFormat
+                )
+                if !cleaned.isEmpty && cleaned != snap.settings.baseFilename {
+                    store.updateSettings(ScanSettingsPatch(baseFilename: cleaned))
+                }
+            }
+        } message: {
+            if let snap = store.snapshot {
+                Text("Saves to \(snap.saveFolderDisplayName) on your Mac as .\(snap.settings.outputFormat.fileExtension).")
+            }
         }
     }
 
@@ -75,19 +97,9 @@ struct RemoteWorkspaceView: View {
                         Text("Last Scan").tag(CanvasViewMode.scan)
                     }
                     .pickerStyle(.segmented)
-                    .frame(maxWidth: 180)
+                    .frame(maxWidth: 184)
                     .disabled(!snap.hasScanImage && snap.viewMode == .preview)
                 }
-
-                Button {
-                    showControlsSheet = true
-                } label: {
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.body.weight(.medium))
-                        .frame(width: 34, height: 34)
-                        .background(.ultraThinMaterial, in: Circle())
-                }
-                .accessibilityLabel("Scan Controls")
             }
             .padding(.horizontal, 14)
             .padding(.top, 8)
@@ -142,35 +154,66 @@ struct RemoteWorkspaceView: View {
                     emptyCanvasView(showingScan: showingScan, snap: snap)
                 }
 
-                // Floating centered top summary pill, Trim / Full Page actions & bottom toast
+                // Floating centered consolidated live + measurements chip (with settings trigger), Trim / Full Page chips & bottom toast
                 VStack(spacing: 6) {
-                    if !snap.outputPreviewSummary.isEmpty, store.proxyImage != nil {
-                        Text(snap.outputPreviewSummary)
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(Color.black.opacity(0.62), in: Capsule())
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .allowsHitTesting(false)
+                    if !store.topStatusPrimaryLine.isEmpty || !store.topStatusSecondaryLine.isEmpty {
+                        Button {
+                            showControlsSheet = true
+                        } label: {
+                            HStack(spacing: 10) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    if !store.topStatusPrimaryLine.isEmpty {
+                                        Text(store.topStatusPrimaryLine)
+                                            .font(.caption2.monospacedDigit().weight(.medium))
+                                            .foregroundStyle(.white)
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.85)
+                                    }
+                                    if !store.topStatusSecondaryLine.isEmpty {
+                                        Text(store.topStatusSecondaryLine)
+                                            .font(.system(size: 10, weight: .regular))
+                                            .foregroundStyle(.white.opacity(0.74))
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.85)
+                                    }
+                                }
+
+                                Image(systemName: "slider.horizontal.3")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(ChromaTheme.cream)
+                                    .frame(width: 28, height: 28)
+                                    .background(Color.white.opacity(0.10), in: Circle())
+                            }
+                            .padding(.leading, 13)
+                            .padding(.trailing, 7)
+                            .padding(.vertical, 6)
+                            .background(Color.black.opacity(0.68), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Scan Controls. \(store.topStatusPrimaryLine). \(store.topStatusSecondaryLine)")
                     }
 
-                    if store.proxyImage != nil {
+                    if store.showsTrimChip || store.showsFullPageChip {
                         HStack(spacing: 8) {
-                            Button {
-                                store.trimEmptySpace()
-                            } label: {
-                                Label("Trim", systemImage: "crop")
-                                    .font(.caption.weight(.semibold))
+                            if store.showsTrimChip {
+                                Button {
+                                    store.trimEmptySpace()
+                                } label: {
+                                    Label("Trim", systemImage: "crop")
+                                        .font(.caption.weight(.semibold))
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.mini)
+                                .background(.ultraThinMaterial, in: Capsule())
+                                .disabled(snap.isBusy)
+                                .transition(.opacity.combined(with: .scale(scale: 0.92)))
                             }
-                            .buttonStyle(.bordered)
-                            .controlSize(.mini)
-                            .background(.ultraThinMaterial, in: Capsule())
-                            .disabled(snap.isBusy || (showingScan && snap.isScanTrimmed))
 
-                            if !showingScan && !snap.cropRect.isFull {
+                            if store.showsFullPageChip {
                                 Button {
                                     store.resetCrop()
                                 } label: {
@@ -202,7 +245,8 @@ struct RemoteWorkspaceView: View {
                 .padding(.horizontal, 12)
                 .padding(.top, 10)
                 .animation(.easeInOut(duration: 0.2), value: store.toastMessage)
-                .animation(.easeInOut(duration: 0.2), value: snap.cropRect.isFull)
+                .animation(.easeInOut(duration: 0.2), value: store.showsTrimChip)
+                .animation(.easeInOut(duration: 0.2), value: store.showsFullPageChip)
             } else {
                 ProgressView("Syncing session…")
             }
@@ -260,14 +304,34 @@ struct RemoteWorkspaceView: View {
     private func idleActionDock(snap: SessionSnapshot) -> some View {
         let ready = snap.selectedScannerID != nil && snap.capabilities != nil
 
-        return VStack(spacing: 10) {
-            // Status & dimensions strip
+        return VStack(spacing: 9) {
+            // Compact tappable output filename chip + status strip
             HStack(spacing: 8) {
-                Text(store.dimensionsReadout)
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Spacer()
+                Button {
+                    renameDraft = snap.settings.baseFilename
+                    showRenameAlert = true
+                } label: {
+                    Text(store.effectiveOutputFilename)
+                        .font(.caption2.monospacedDigit().weight(.medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Color.primary.opacity(0.09), in: Capsule())
+                        .overlay(
+                            Capsule()
+                                .strokeBorder(Color.primary.opacity(0.11), lineWidth: 0.5)
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(snap.isBusy)
+                .frame(maxWidth: 180, alignment: .leading)
+                .layoutPriority(1)
+                .accessibilityLabel("Output filename \(store.effectiveOutputFilename). Tap to rename.")
+
+                Spacer(minLength: 4)
+
                 Text(snap.statusText)
                     .font(.caption2.monospacedDigit().weight(.medium))
                     .foregroundStyle(snap.isErrorStatus ? .red : .secondary)
@@ -309,16 +373,16 @@ struct RemoteWorkspaceView: View {
                 Button {
                     store.triggerExport()
                 } label: {
-                    Label("Export", systemImage: "square.and.arrow.down")
+                    Image(systemName: "square.and.arrow.down")
                         .font(.subheadline.weight(.medium))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
+                        .padding(.horizontal, 4)
                         .padding(.vertical, 4)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.regular)
                 .fixedSize(horizontal: true, vertical: false)
                 .disabled(!snap.hasScanImage)
+                .accessibilityLabel("Export")
             }
         }
     }
@@ -396,7 +460,7 @@ struct RemoteWorkspaceView: View {
             return "Disconnected"
         case .connected:
             if let scanner = store.snapshot?.selectedScanner {
-                return "\(scanner.displayTitle) · \(store.snapshot?.settings.resolution ?? 1200) DPI"
+                return scanner.displayTitle
             }
             return "No Scanner Selected"
         }

@@ -52,13 +52,7 @@ struct ScanLiveActivityWidget: Widget {
                             Spacer(minLength: 8)
 
                             if !context.state.isTerminal {
-                                Text(context.attributes.startedAt, style: .timer)
-                                    .font(.caption.weight(.medium).monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.75)
-                                    .multilineTextAlignment(.trailing)
-                                    .frame(maxWidth: 84, alignment: .trailing)
+                                liveTimerView(context: context, foreground: .secondary)
                             }
                         }
 
@@ -396,13 +390,7 @@ private struct LockScreenScanLiveActivityView: View {
                 Spacer(minLength: 8)
 
                 if !context.state.isTerminal {
-                    Text(context.attributes.startedAt, style: .timer)
-                        .font(.caption.weight(.medium).monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.75))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                        .multilineTextAlignment(.trailing)
-                        .frame(maxWidth: 84, alignment: .trailing)
+                    liveTimerView(context: context, foreground: Color.white.opacity(0.75))
                 }
             }
         }
@@ -489,5 +477,32 @@ private func primaryDetailLine(context: ActivityViewContext<ScanLiveActivityAttr
         return context.state.statusText
     case .starting, .scanning, .processing:
         return context.state.statusText
+    }
+}
+
+@ViewBuilder
+private func liveTimerView<S: ShapeStyle>(
+    context: ActivityViewContext<ScanLiveActivityAttributes>,
+    foreground: S
+) -> some View {
+    if context.state.phase == .scanning,
+       let endTs = context.state.estimatedEndTimestamp {
+        let endDate = Date(timeIntervalSince1970: endTs)
+        let startDate = min(context.attributes.startedAt, endDate)
+        Text("~\(Text(timerInterval: startDate...endDate, countsDown: true)) left")
+            .font(.caption.weight(.medium).monospacedDigit())
+            .foregroundStyle(foreground)
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+            .multilineTextAlignment(.trailing)
+            .frame(maxWidth: 108, alignment: .trailing)
+    } else {
+        Text(context.attributes.startedAt, style: .timer)
+            .font(.caption.weight(.medium).monospacedDigit())
+            .foregroundStyle(foreground)
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+            .multilineTextAlignment(.trailing)
+            .frame(maxWidth: 84, alignment: .trailing)
     }
 }

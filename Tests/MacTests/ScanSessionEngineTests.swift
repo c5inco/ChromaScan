@@ -467,6 +467,43 @@ final class ScanSessionEngineTests: XCTestCase {
         XCTAssertEqual(engine.selectedScannerID, "usb:hp")
     }
 
+    func testTransferSpeedEstimatorIgnoresWarmupAndPredictsRemainingTime() {
+        var estimator = ScanTransferSpeedEstimator(windowSeconds: 10.0, minStreamingSeconds: 1.5, minSampleInterval: 0.2)
+        let expected: Int64 = 100 * 1024 * 1024 // 100 MB
+
+        // First byte arrives after an 8s warm-up -> not enough streaming span yet
+        estimator.record(bytesReceived: 1 * 1024 * 1024, at: 8.0)
+        XCTAssertNil(estimator.estimatedRemainingSeconds(bytesReceived: 1 * 1024 * 1024, expectedBytes: expected))
+
+        estimator.record(bytesReceived: 2 * 1024 * 1024, at: 9.0)
+        XCTAssertNil(estimator.estimatedRemainingSeconds(bytesReceived: 2 * 1024 * 1024, expectedBytes: expected))
+
+        // Steady 1 MB/s streaming after 2s -> 97 MB remaining -> ~97s left
+        estimator.record(bytesReceived: 3 * 1024 * 1024, at: 10.0)
+        let eta = estimator.estimatedRemainingSeconds(bytesReceived: 3 * 1024 * 1024, expectedBytes: expected)
+        XCTAssertEqual(eta ?? -1, 97.0, accuracy: 0.5)
+
+        // Formatting sanity checks
+        XCTAssertEqual(ScanLiveActivityContentState.formatRemainingSeconds(42.2), "~42s left")
+        XCTAssertEqual(ScanLiveActivityContentState.formatRemainingSeconds(120.0), "~2m left")
+        XCTAssertEqual(ScanLiveActivityContentState.formatRemainingSeconds(135.0), "~2m 15s left")
+
+        // Live activity content state populates estimatedEndTimestamp when ETA is provided
+        let now = Date(timeIntervalSince1970: 1_750_000_000)
+        let state = ScanLiveActivityContentState.fromProgress(
+            bytesReceived: 40 * 1024 * 1024,
+            expectedBytes: expected,
+            statusText: "Scanning",
+            estimatedRemainingSeconds: 60.0,
+            now: now
+        )
+        XCTAssertEqual(state.estimatedEndTimestamp ?? -1, 1_750_000_060.0, accuracy: 0.001)
+
+        // Reset clears previous rate (e.g. USB -> Wi-Fi fallback)
+        estimator.reset()
+        XCTAssertNil(estimator.estimatedRemainingSeconds(bytesReceived: 3 * 1024 * 1024, expectedBytes: expected))
+    }
+
     private func waitUntil(timeout: TimeInterval, condition: @escaping @MainActor () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition() {

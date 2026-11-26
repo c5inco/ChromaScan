@@ -111,20 +111,22 @@ final class ChromaScanRemoteTests: XCTestCase {
         XCTAssertTrue(warmup.statusDetail.contains("expected"))
         XCTAssertFalse(warmup.metadataSummary.isEmpty)
 
-        // Advance to active transfer -> determinate fraction & percentage badge
+        // Advance to active transfer -> determinate fraction & percentage badge + ETA
         mockHost.broadcastProgress(
             operation: .scan,
             bytesReceived: 40 * 1024 * 1024,
             expectedBytes: 100 * 1024 * 1024,
             elapsedSeconds: 12,
-            statusText: "Scanning 1200 DPI · 40.0 / 100.0 MB (12s)"
+            statusText: "Scanning 1200 DPI · 40.0 / 100.0 MB · ~18s left",
+            estimatedRemainingSeconds: 18
         )
         try await waitUntil(timeout: 2.0) { store.progress?.bytesReceived == 40 * 1024 * 1024 }
         let transferring = store.activeOperationInfo
         XCTAssertEqual(transferring.title, "Scanning · 1200 DPI")
         XCTAssertEqual(transferring.progressFraction ?? -1, 0.4, accuracy: 0.001)
         XCTAssertEqual(transferring.trailingBadge, "40%")
-        XCTAssertEqual(transferring.statusDetail, "40.0 MB / 100.0 MB · 12s")
+        XCTAssertEqual(transferring.statusDetail, "40.0 MB / 100.0 MB · ~18s left")
+        XCTAssertFalse(store.plannedCaptureReadout.contains("raw"))
 
         // Advance to processing & saving phase -> switches back to indeterminate with elapsed badge
         mockHost.broadcastProgress(
@@ -414,17 +416,19 @@ final class ChromaScanRemoteTests: XCTestCase {
             mockHost.lastRegisteredLiveActivityToken == "mock-la-token-1"
         }
 
-        // 2. Progress updates flow into Live Activity state
+        // 2. Progress updates flow into Live Activity state with ETA timestamp
         mockHost.broadcastProgress(
             operation: .scan,
             bytesReceived: 50 * 1024 * 1024,
             expectedBytes: 100 * 1024 * 1024,
             elapsedSeconds: 32,
-            statusText: "Scanning 1200 DPI · 50.0 / 100.0 MB (32s)"
+            statusText: "Scanning 1200 DPI · 50.0 / 100.0 MB · ~32s left",
+            estimatedRemainingSeconds: 32
         )
         try await waitUntil(timeout: 2.0) {
             mockLA.updates.last?.phase == .scanning && mockLA.updates.last?.progressPercent == 50
         }
+        XCTAssertNotNil(mockLA.updates.last?.estimatedEndTimestamp)
 
         mockHost.broadcastProgress(
             operation: .scan,
@@ -473,6 +477,74 @@ final class ChromaScanRemoteTests: XCTestCase {
         try await waitUntil(timeout: 2.0) { !store.isScanActive }
     }
 
+    func testTrimAndFullPageChipVisibilityAndFilenameSanitization() async throws {
+        XCTAssertEqual(RemoteSessionStore.sanitizedBaseFilename("  artwork-01.tiff  ", format: .tiffLZW), "artwork-01")
+        XCTAssertEqual(RemoteSessionStore.sanitizedBaseFilename("poppy", format: .png), "poppy")
+
+        let mockHost = try LoopbackMockMacHost(pin: "123456")
+        let port = try await mockHost.start()
+        defer { mockHost.stop() }
+
+        let tokenStore = KeychainTokenStore()
+        tokenStore.deleteToken(for: "mock-mac-studio")
+        tokenStore.deleteToken(for: "manual:127.0.0.1:\(port)")
+
+        let store = RemoteSessionStore(clientName: "Simulator iPhone", tokenStore: tokenStore)
+        defer { store.disconnect() }
+
+        store.connectManual(host: "127.0.0.1", port: port, pin: "123456")
+        try await waitUntil(timeout: 3.0) {
+            if case .connected = store.phase, store.snapshot != nil, store.proxyImage != nil { return true }
+            return false
+        }
+
+        // Preview mode starts at full page: Trim visible, Full Page hidden
+        XCTAssertEqual(store.effectiveOutputFilename, "scan-001.tiff")
+        XCTAssertTrue(store.showsTrimChip)
+        XCTAssertFalse(store.showsFullPageChip)
+
+        // Using Trim hides Trim immediately; host responds with cropped rect -> Full Page shows
+        store.trimEmptySpace()
+        XCTAssertFalse(store.showsTrimChip)
+        try await waitUntil(timeout: 2.0) { store.snapshot?.cropRect.isFull == false }
+        XCTAssertFalse(store.showsTrimChip)
+        XCTAssertTrue(store.showsFullPageChip)
+
+        // Resizing marquee brings Trim back while keeping Full Page visible
+        store.setCropRect(NormalizedCropRect(x: 0.1, y: 0.1, width: 0.7, height: 0.7), immediate: true)
+        XCTAssertTrue(store.showsTrimChip)
+        XCTAssertTrue(store.showsFullPageChip)
+
+        // Using Trim again hides Trim, then tapping Full Page hides Full Page and shows Trim
+        store.trimEmptySpace()
+        XCTAssertFalse(store.showsTrimChip)
+        store.resetCrop()
+        XCTAssertFalse(store.showsFullPageChip)
+        XCTAssertTrue(store.showsTrimChip)
+
+        // Resizing smaller than full page brings Full Page back
+        store.setCropRect(NormalizedCropRect(x: 0.05, y: 0.05, width: 0.8, height: 0.8), immediate: true)
+        XCTAssertTrue(store.showsFullPageChip)
+        XCTAssertTrue(store.showsTrimChip)
+
+        // Starting a scan hides both Trim and Full Page chips while busy
+        store.triggerScan()
+        try await waitUntil(timeout: 2.0) { store.snapshot?.isBusy == true }
+        XCTAssertFalse(store.showsTrimChip)
+        XCTAssertFalse(store.showsFullPageChip)
+
+        store.cancelActiveOperation()
+        try await waitUntil(timeout: 2.0) { store.snapshot?.isBusy == false }
+        XCTAssertTrue(store.showsTrimChip)
+        XCTAssertTrue(store.showsFullPageChip)
+
+        // Switching to Last Scan hides both Trim and Full Page chips
+        store.setViewMode(.scan)
+        try await waitUntil(timeout: 2.0) { store.snapshot?.viewMode == .scan }
+        XCTAssertFalse(store.showsTrimChip)
+        XCTAssertFalse(store.showsFullPageChip)
+    }
+
     private func waitUntil(timeout: TimeInterval, condition: @escaping @MainActor () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition() {
@@ -498,6 +570,7 @@ private final class LoopbackMockMacHost {
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private var currentViewMode: CanvasViewMode = .preview
+    private var currentCropRect: NormalizedCropRect = .full
     private var isBusy: Bool = false
     private var activeOperation: CompanionOperation?
     private var currentStatusText: String = "Ready"
@@ -615,9 +688,15 @@ private final class LoopbackMockMacHost {
             sendText(.snapshot(snapshot: makeSnapshot()), on: conn)
             sendSyntheticImage(kind: mode == .scan ? .scanProxy : .previewProxy, requestID: 0, normRect: nil, on: conn)
 
+        case .setCropRect(let cropRect):
+            currentCropRect = cropRect
+            sendText(.snapshot(snapshot: makeSnapshot()), on: conn)
+
         case .trimEmptySpace:
             if currentViewMode == .scan {
                 isScanTrimmed = true
+            } else {
+                currentCropRect = NormalizedCropRect(x: 0.15, y: 0.15, width: 0.70, height: 0.70)
             }
             sendText(.snapshot(snapshot: makeSnapshot()), on: conn)
 
@@ -661,7 +740,8 @@ private final class LoopbackMockMacHost {
         bytesReceived: Int64,
         expectedBytes: Int64,
         elapsedSeconds: Double,
-        statusText: String
+        statusText: String,
+        estimatedRemainingSeconds: Double? = nil
     ) {
         currentStatusText = statusText
         for conn in connections {
@@ -670,7 +750,8 @@ private final class LoopbackMockMacHost {
                 bytesReceived: bytesReceived,
                 expectedBytes: expectedBytes,
                 elapsedSeconds: elapsedSeconds,
-                statusText: statusText
+                statusText: statusText,
+                estimatedRemainingSeconds: estimatedRemainingSeconds
             ), on: conn)
         }
     }
@@ -716,7 +797,7 @@ private final class LoopbackMockMacHost {
             capabilities: nil,
             scannerStatus: ScannerStatus(state: "Idle", adfState: nil),
             settings: ScanSessionSettings(),
-            cropRect: .full,
+            cropRect: currentCropRect,
             viewMode: currentViewMode,
             isBusy: isBusy,
             activeOperation: activeOperation,

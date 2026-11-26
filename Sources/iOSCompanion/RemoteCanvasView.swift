@@ -206,7 +206,7 @@ final class RemoteCanvasUIView: UIView, UIScrollViewDelegate {
             return
         }
 
-        let topPadding: CGFloat = 44
+        let topPadding: CGFloat = 104
         let sidePadding: CGFloat = 18
         let bottomPadding: CGFloat = 18
         let availW = max(1, bounds.width - sidePadding * 2)
@@ -238,10 +238,17 @@ final class RemoteCanvasUIView: UIView, UIScrollViewDelegate {
     }
 
     private func centerContent() {
-        let topBias: CGFloat = scrollView.zoomScale <= 1.02 ? 12 : 0
         let offsetX = max((scrollView.bounds.width - scrollView.contentSize.width) * 0.5, 0)
-        let offsetY = max((scrollView.bounds.height - scrollView.contentSize.height) * 0.5 + topBias, 0)
-        scrollView.contentInset = UIEdgeInsets(top: offsetY, left: offsetX, bottom: max(0, offsetY - topBias), right: offsetX)
+        if scrollView.zoomScale <= 1.02 {
+            let topPad: CGFloat = 104
+            let bottomPad: CGFloat = 18
+            let availH = max(0, scrollView.bounds.height - topPad - bottomPad)
+            let extra = max(0, (availH - scrollView.contentSize.height) * 0.5)
+            scrollView.contentInset = UIEdgeInsets(top: topPad + extra, left: offsetX, bottom: bottomPad + extra, right: offsetX)
+        } else {
+            let offsetY = max((scrollView.bounds.height - scrollView.contentSize.height) * 0.5, 0)
+            scrollView.contentInset = UIEdgeInsets(top: offsetY, left: offsetX, bottom: offsetY, right: offsetX)
+        }
     }
 
     private func syncCropOverlayPageFrame() {
@@ -618,18 +625,18 @@ private final class TouchCropOverlayView: UIView {
 
         // Border
         ctx.saveGState()
-        ctx.setStrokeColor(tintColor.cgColor)
+        ctx.setStrokeColor(ChromaTheme.creamUI.cgColor)
         ctx.setLineWidth(2.0)
         ctx.stroke(selRect)
 
-        // Crisp circular touch handles with white fill + accent ring
+        // Crisp circular touch handles with white fill + vermilion ring (matching Android)
         let radius: CGFloat = 7.5
         for handle in Handle.allCases {
             let c = handleCenter(handle, in: selRect)
             let dot = CGRect(x: c.x - radius, y: c.y - radius, width: radius * 2, height: radius * 2)
             ctx.setFillColor(UIColor.white.cgColor)
             ctx.fillEllipse(in: dot)
-            ctx.setStrokeColor(tintColor.cgColor)
+            ctx.setStrokeColor(ChromaTheme.vermilionUI.cgColor)
             ctx.setLineWidth(2.25)
             ctx.strokeEllipse(in: dot)
         }

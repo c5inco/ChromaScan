@@ -107,7 +107,7 @@ final class CompanionProtocolTests: XCTestCase {
             .welcome(protocolVersion: 1, hostID: "host-1", hostName: "Mac Studio", authToken: "abc123", snapshot: snapshot),
             .authRequired(hostID: "host-1", hostName: "Mac Studio", reason: "Incorrect pairing PIN."),
             .snapshot(snapshot: snapshot),
-            .progress(operation: .scan, bytesReceived: 184_549_376, expectedBytes: 423_624_704, elapsedSeconds: 72.4, statusText: "Scanning 1200 DPI"),
+            .progress(operation: .scan, bytesReceived: 184_549_376, expectedBytes: 423_624_704, elapsedSeconds: 72.4, statusText: "Scanning 1200 DPI", estimatedRemainingSeconds: 93.5),
             .imageReady(info),
             .scanCompleted(filename: "scan-004.tiff", pixelWidth: 10200, pixelHeight: 13200, fileSizeBytes: 214_958_080, elapsedSeconds: 168.2),
             .exportCompleted(filename: "scan-005.heic", fileSizeBytes: 4_200_000, elapsedSeconds: 0.45),

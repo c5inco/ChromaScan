@@ -541,7 +541,7 @@ final class CompanionServer {
         case .fullScanImageReady:
             break
 
-        case .progress(let op, let bytesReceived, let expectedBytes, let elapsedSeconds, let statusText):
+        case .progress(let op, let bytesReceived, let expectedBytes, let elapsedSeconds, let statusText, let estimatedRemainingSeconds):
             let now = CFAbsoluteTimeGetCurrent()
             if op == .scan {
                 isTrackingScanForLiveActivity = true
@@ -549,6 +549,7 @@ final class CompanionServer {
                     bytesReceived: bytesReceived,
                     expectedBytes: expectedBytes,
                     statusText: statusText,
+                    estimatedRemainingSeconds: estimatedRemainingSeconds,
                     now: now
                 )
             }
@@ -562,7 +563,8 @@ final class CompanionServer {
                     bytesReceived: bytesReceived,
                     expectedBytes: expectedBytes,
                     elapsedSeconds: elapsedSeconds,
-                    statusText: statusText
+                    statusText: statusText,
+                    estimatedRemainingSeconds: estimatedRemainingSeconds
                 )
             )
 
@@ -713,6 +715,7 @@ final class CompanionServer {
         bytesReceived: Int64,
         expectedBytes: Int64,
         statusText: String,
+        estimatedRemainingSeconds: Double?,
         now: CFAbsoluteTime
     ) {
         guard !activeLiveActivityTargets.isEmpty, preferences.isAPNsConfigured else { return }
@@ -720,7 +723,8 @@ final class CompanionServer {
         let state = ScanLiveActivityContentState.fromProgress(
             bytesReceived: bytesReceived,
             expectedBytes: expectedBytes,
-            statusText: statusText
+            statusText: statusText,
+            estimatedRemainingSeconds: estimatedRemainingSeconds
         )
         let phaseChanged = (lastLiveActivityPhase != state.phase)
         if !phaseChanged && (now - lastLiveActivityPushTime) < liveActivityUpdateInterval {

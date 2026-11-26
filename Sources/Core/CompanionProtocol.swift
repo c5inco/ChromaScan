@@ -311,7 +311,7 @@ enum HostMessage: Equatable, Sendable {
     case welcome(protocolVersion: Int, hostID: String, hostName: String, authToken: String, snapshot: SessionSnapshot)
     case authRequired(hostID: String, hostName: String, reason: String?)
     case snapshot(snapshot: SessionSnapshot)
-    case progress(operation: CompanionOperation, bytesReceived: Int64, expectedBytes: Int64, elapsedSeconds: Double, statusText: String)
+    case progress(operation: CompanionOperation, bytesReceived: Int64, expectedBytes: Int64, elapsedSeconds: Double, statusText: String, estimatedRemainingSeconds: Double? = nil)
     case imageReady(CompanionImageReadyInfo)
     case scanCompleted(filename: String, pixelWidth: Int, pixelHeight: Int, fileSizeBytes: Int64, elapsedSeconds: Double)
     case exportCompleted(filename: String, fileSizeBytes: Int64, elapsedSeconds: Double)
@@ -334,6 +334,7 @@ extension HostMessage: Codable {
         case expectedBytes
         case elapsedSeconds
         case statusText
+        case estimatedRemainingSeconds
         case kind
         case generation
         case requestID
@@ -379,7 +380,8 @@ extension HostMessage: Codable {
                 bytesReceived: try c.decode(Int64.self, forKey: .bytesReceived),
                 expectedBytes: try c.decode(Int64.self, forKey: .expectedBytes),
                 elapsedSeconds: try c.decode(Double.self, forKey: .elapsedSeconds),
-                statusText: try c.decode(String.self, forKey: .statusText)
+                statusText: try c.decode(String.self, forKey: .statusText),
+                estimatedRemainingSeconds: try c.decodeIfPresent(Double.self, forKey: .estimatedRemainingSeconds)
             )
         case "imageReady":
             let info = CompanionImageReadyInfo(
@@ -441,13 +443,14 @@ extension HostMessage: Codable {
         case .snapshot(let snapshot):
             try c.encode("snapshot", forKey: .type)
             try c.encode(snapshot, forKey: .snapshot)
-        case .progress(let operation, let bytesReceived, let expectedBytes, let elapsedSeconds, let statusText):
+        case .progress(let operation, let bytesReceived, let expectedBytes, let elapsedSeconds, let statusText, let estimatedRemainingSeconds):
             try c.encode("progress", forKey: .type)
             try c.encode(operation, forKey: .operation)
             try c.encode(bytesReceived, forKey: .bytesReceived)
             try c.encode(expectedBytes, forKey: .expectedBytes)
             try c.encode(elapsedSeconds, forKey: .elapsedSeconds)
             try c.encode(statusText, forKey: .statusText)
+            try c.encodeIfPresent(estimatedRemainingSeconds, forKey: .estimatedRemainingSeconds)
         case .imageReady(let info):
             try c.encode("imageReady", forKey: .type)
             try c.encode(info.kind, forKey: .kind)
