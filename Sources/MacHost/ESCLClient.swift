@@ -11,6 +11,7 @@ enum ESCLClientError: Error, LocalizedError {
     case cancelled
     case emptyDocument
     case invalidImageData(String)
+    case scannerNotResponding(seconds: Int)
 
     var errorDescription: String? {
         switch self {
@@ -19,6 +20,8 @@ enum ESCLClientError: Error, LocalizedError {
         case .cancelled: return "Scan cancelled."
         case .emptyDocument: return "Scanner returned an empty document."
         case .invalidImageData(let detail): return "Could not decode scanned image: \(detail)"
+        case .scannerNotResponding(let seconds):
+            return "The scanner didn't accept the scan request within \(seconds) s. If it's connected over USB, macOS may be restarting its USB printer service — try again in a moment."
         }
     }
 }
@@ -76,6 +79,24 @@ final class ESCLClient: ESCLClientProtocol, Sendable {
     }
 
     func performScan(
+        scanner: DiscoveredScanner,
+        request: ScanJobRequest,
+        onProgress: @escaping @Sendable (_ bytesReceived: Int64, _ expectedBytes: Int64) -> Void
+    ) async throws -> ScanDownloadResult {
+        do {
+            return try await performScanSteps(scanner: scanner, request: request, onProgress: onProgress)
+        } catch {
+            // A cancel can land at any step (e.g. while POST /ScanJobs is still waiting on the
+            // printer), where URLSession reports it as URLError.cancelled rather than our own error.
+            // Normalize so callers treat it as a user cancel, not a failure.
+            if Task.isCancelled || (error as? URLError)?.code == .cancelled || error is CancellationError {
+                throw ESCLClientError.cancelled
+            }
+            throw error
+        }
+    }
+
+    private func performScanSteps(
         scanner: DiscoveredScanner,
         request: ScanJobRequest,
         onProgress: @escaping @Sendable (_ bytesReceived: Int64, _ expectedBytes: Int64) -> Void
@@ -307,9 +328,20 @@ final class ESCLClient: ESCLClientProtocol, Sendable {
         postReq.httpMethod = "POST"
         postReq.setValue("text/xml; charset=utf-8", forHTTPHeaderField: "Content-Type")
         postReq.httpBody = xml.data(using: .utf8)
+        // Normally answered in ~0.2 s (a printer waking from sleep can take several seconds). Without
+        // its own timeout a POST that the printer / macOS ippusbd never answers would hang for the
+        // session's 120 s idle timeout with no feedback.
+        postReq.timeoutInterval = Self.postScanJobTimeout
         transferLog.notice("[\(Self.endpointLabel(jobsURL), privacy: .public)] ScanSettings:\n\(xml, privacy: .public)")
-        return try await session.data(for: postReq)
+        do {
+            return try await session.data(for: postReq)
+        } catch let error as URLError where error.code == .timedOut {
+            transferLog.notice("[\(Self.endpointLabel(jobsURL), privacy: .public)] POST /ScanJobs got no answer in \(Int(Self.postScanJobTimeout))s")
+            throw ESCLClientError.scannerNotResponding(seconds: Int(Self.postScanJobTimeout))
+        }
     }
+
+    static let postScanJobTimeout: TimeInterval = 45
 
     private func validateHTTP(
         _ response: URLResponse,

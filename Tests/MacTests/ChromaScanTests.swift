@@ -1,6 +1,7 @@
 import XCTest
 import CoreGraphics
 import ImageIO
+import Network
 @testable import ChromaScan
 
 final class ChromaScanTests: XCTestCase {
@@ -389,5 +390,81 @@ final class ChromaScanTests: XCTestCase {
         XCTAssertGreaterThan(a, 0)
         XCTAssertEqual(b - a, 10) // tenths of a second
         XCTAssertEqual(ScanSessionEngine.launchImageGenerationSeed(now: Date(timeIntervalSince1970: 0)), 0)
+    }
+
+    // MARK: - Cancellation while POST /ScanJobs is unanswered
+
+    /// Loopback HTTP server that answers ScannerStatus but never answers POST /ScanJobs —
+    /// like a printer / macOS ippusbd that accepted the connection and then hung.
+    private final class HangingScanServer: @unchecked Sendable {
+        let listener: NWListener
+        private var connections: [NWConnection] = []
+        private let queue = DispatchQueue(label: "HangingScanServer")
+
+        init() throws {
+            listener = try NWListener(using: .tcp, on: .any)
+            listener.newConnectionHandler = { [weak self] conn in
+                guard let self else { return }
+                self.connections.append(conn)
+                conn.start(queue: self.queue)
+                self.receive(on: conn)
+            }
+        }
+
+        func start() async throws -> UInt16 {
+            listener.start(queue: queue)
+            for _ in 0..<100 {
+                if let port = listener.port?.rawValue, port > 0 { return port }
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+            throw XCTSkip("loopback listener did not start")
+        }
+
+        private func receive(on conn: NWConnection) {
+            conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, done, _ in
+                guard let self else { return }
+                if let data, let text = String(data: data, encoding: .utf8), text.hasPrefix("GET /eSCL/ScannerStatus") {
+                    let body = "<?xml version=\"1.0\"?><scan:ScannerStatus xmlns:scan=\"http://schemas.hp.com/imaging/escl/2011/05/03\" xmlns:pwg=\"http://www.pwg.org/schemas/2010/12/sm\"><pwg:State>Idle</pwg:State></scan:ScannerStatus>"
+                    let resp = "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: \(body.utf8.count)\r\n\r\n\(body)"
+                    conn.send(content: Data(resp.utf8), completion: .contentProcessed { _ in })
+                }
+                // Anything else (POST /ScanJobs) is read and never answered.
+                if !done { self.receive(on: conn) }
+            }
+        }
+
+        func stop() {
+            listener.cancel()
+            connections.forEach { $0.cancel() }
+        }
+    }
+
+    func testCancellingWhileScanRequestIsUnansweredReportsCancelledNotFailure() async throws {
+        let server = try HangingScanServer()
+        defer { server.stop() }
+        let port = try await server.start()
+
+        let scanner = DiscoveredScanner(
+            id: "hang", name: "Hanging Scanner", host: "127.0.0.1", port: Int(port),
+            useTLS: false, rootPath: "eSCL", modelName: nil, uuid: nil
+        )
+        let request = ScanJobRequest(
+            version: "2.5", inputSource: .platen, resolution: 100, colorMode: .rgb24, intent: .photo,
+            isPreview: false, transferFormat: .rawOctetStream, region: (0, 0, 2550, 3508),
+            brightness: nil, contrast: nil
+        )
+        let client = ESCLClient(ownedJobsSuiteName: "com.chromascan.tests.escl-owned-jobs")
+        let task = Task { try await client.performScan(scanner: scanner, request: request) { _, _ in } }
+        try await Task.sleep(nanoseconds: 1_000_000_000) // POST is now in flight and unanswered
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            XCTFail("expected cancellation")
+        } catch ESCLClientError.cancelled {
+            // expected: engine shows "Scan cancelled", not "Scan Failed"
+        } catch {
+            XCTFail("expected ESCLClientError.cancelled, got \(error)")
+        }
     }
 }

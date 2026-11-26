@@ -88,6 +88,10 @@ final class ScanSessionEngine {
     private var fullScanRenderSignature: RenderSignature?
 
     private var activeTask: Task<Void, Never>?
+    /// Bytes received so far by the active capture, and an ID so a stale "waiting" watchdog from a
+    /// previous capture can't overwrite the status of a newer one.
+    private var captureBytesReceived: Int64 = 0
+    private var captureID = UUID()
     private var previewRenderTask: Task<Void, Never>?
     private var fullScanRenderTask: Task<Void, Never>?
     private var trimTask: Task<Void, Never>?
@@ -731,6 +735,23 @@ final class ScanSessionEngine {
         startCapture(isPreview: false)
     }
 
+    /// Normally image data starts within ~10 s (1200 DPI warm-up is ~8 s). If nothing has arrived after
+    /// 15 s, say so instead of sitting silently at 0% — on Mac and on the companion via `.progress`.
+    private func startWaitingForScannerWatchdog(captureID: UUID, operation op: CompanionOperation, labelPrefix: String, startTime: CFAbsoluteTime, expectedBytes: Int64) {
+        Task { @MainActor [weak self] in
+            while true {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard let self, self.captureID == captureID, self.isBusy,
+                      self.activeOperation == op, self.captureBytesReceived == 0 else { return }
+                let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+                guard elapsed >= 15 else { continue }
+                let status = String(format: "%@ · waiting for scanner to respond (%.0fs)…", labelPrefix, elapsed)
+                self.statusText = status
+                self.emit(.progress(operation: op, bytesReceived: 0, expectedBytes: expectedBytes, elapsedSeconds: elapsed, statusText: status))
+            }
+        }
+    }
+
     func cancelActiveOperation() {
         activeTask?.cancel()
         activeTask = nil
@@ -805,6 +826,12 @@ final class ScanSessionEngine {
         broadcastSnapshot()
         emit(.progress(operation: op, bytesReceived: 0, expectedBytes: request.transferFormat == .rawOctetStream ? request.expectedRawByteCount : 0, elapsedSeconds: 0, statusText: statusText))
 
+        captureBytesReceived = 0
+        let thisCaptureID = UUID()
+        captureID = thisCaptureID
+        startWaitingForScannerWatchdog(captureID: thisCaptureID, operation: op, labelPrefix: labelPrefix, startTime: startTime,
+                                       expectedBytes: request.transferFormat == .rawOctetStream ? request.expectedRawByteCount : 0)
+
         activeTask = Task { [weak self] in
             guard let self else { return }
             defer {
@@ -816,6 +843,9 @@ final class ScanSessionEngine {
                     let elapsed = CFAbsoluteTimeGetCurrent() - startTime
                     Task { @MainActor [weak self] in
                         guard let self, self.isBusy else { return }
+                        if self.captureID == thisCaptureID {
+                            self.captureBytesReceived = max(self.captureBytesReceived, recv)
+                        }
                         let recvMB = Double(recv) / (1024.0 * 1024.0)
                         let status: String
                         if expected > 0 {
