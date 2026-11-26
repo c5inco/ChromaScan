@@ -234,7 +234,8 @@ sealed class HostMessage {
         val bytesReceived: Long,
         val expectedBytes: Long,
         val elapsedSeconds: Double,
-        val statusText: String
+        val statusText: String,
+        val estimatedRemainingSeconds: Double? = null
     ) : HostMessage()
 
     @Serializable

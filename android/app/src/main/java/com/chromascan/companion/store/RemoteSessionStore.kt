@@ -59,7 +59,8 @@ data class RemoteProgressState(
     val bytesReceived: Long,
     val expectedBytes: Long,
     val elapsedSeconds: Double,
-    val statusText: String
+    val statusText: String,
+    val estimatedRemainingSeconds: Double? = null
 ) {
     val fraction: Double?
         get() = if (expectedBytes > 0) min(1.0, bytesReceived.toDouble() / expectedBytes.toDouble()) else null
@@ -93,10 +94,44 @@ data class RemoteUiState(
     val toastMessage: String? = null,
     val errorAlert: RemoteErrorAlert? = null,
     val isSavingToPhotos: Boolean = false,
-    val notifyOnScanComplete: Boolean = true
+    val notifyOnScanComplete: Boolean = true,
+    val isTrimChipHidden: Boolean = false
 ) {
     val isConnected: Boolean
         get() = connectionStatus is ConnectionStatus.Connected
+
+    val showsTrimChip: Boolean
+        get() {
+            val snap = snapshot ?: return false
+            return !snap.isBusy &&
+                snap.viewMode == CanvasViewMode.PREVIEW &&
+                snap.hasPreviewImage &&
+                proxyBitmap != null &&
+                !isTrimChipHidden
+        }
+
+    val showsFullPageChip: Boolean
+        get() {
+            val snap = snapshot ?: return false
+            return !snap.isBusy &&
+                snap.viewMode == CanvasViewMode.PREVIEW &&
+                snap.hasPreviewImage &&
+                proxyBitmap != null &&
+                !snap.cropRect.isFull
+        }
+
+    val effectiveOutputFilename: String
+        get() {
+            val snap = snapshot ?: return ""
+            val stem = snap.settings.baseFilename.trim().ifEmpty { "scan" }
+            return "$stem.${snap.settings.outputFormat.fileExtension}"
+        }
+
+    val topStatusPrimaryLine: String
+        get() = snapshot?.let { RemoteSessionStore.computeTopStatusPrimaryLine(it) } ?: ""
+
+    val topStatusSecondaryLine: String
+        get() = snapshot?.let { RemoteSessionStore.computeTopStatusSecondaryLine(it) } ?: ""
 
     val isScanActive: Boolean
         get() {
@@ -262,7 +297,8 @@ class RemoteSessionStore private constructor(context: Context) {
             it.copy(
                 phase = AuthPhase.Browsing,
                 snapshot = null,
-                progress = null
+                progress = null,
+                isTrimChipHidden = false
             )
         }
         browser.start(clearExisting = true)
@@ -351,7 +387,11 @@ class RemoteSessionStore private constructor(context: Context) {
         val clamped = rect.clamped()
         _uiState.update { cur ->
             val snap = cur.snapshot ?: return@update cur
-            cur.copy(snapshot = snap.copy(cropRect = clamped))
+            val changed = clamped != snap.cropRect
+            cur.copy(
+                snapshot = snap.copy(cropRect = clamped),
+                isTrimChipHidden = if (changed) false else cur.isTrimChipHidden
+            )
         }
 
         if (immediate) {
@@ -377,11 +417,15 @@ class RemoteSessionStore private constructor(context: Context) {
     }
 
     fun resetCrop() {
+        _uiState.update { it.copy(isTrimChipHidden = false) }
         setCropRect(NormalizedCropRect.FULL, immediate = true)
     }
 
     fun trimEmptySpace() {
-        if (_uiState.value.snapshot?.viewMode == CanvasViewMode.SCAN) {
+        val viewMode = _uiState.value.snapshot?.viewMode
+        if (viewMode == CanvasViewMode.PREVIEW) {
+            _uiState.update { it.copy(isTrimChipHidden = true) }
+        } else if (viewMode == CanvasViewMode.SCAN) {
             clearHighResTile()
         }
         client.send(ClientMessage.TrimEmptySpace)
@@ -393,6 +437,7 @@ class RemoteSessionStore private constructor(context: Context) {
     }
 
     fun triggerPreview() {
+        _uiState.update { it.copy(isTrimChipHidden = false) }
         client.send(ClientMessage.TriggerPreview)
     }
 
@@ -524,7 +569,8 @@ class RemoteSessionStore private constructor(context: Context) {
                     it.copy(
                         phase = AuthPhase.Connected(message.hostID, message.hostName),
                         proxyRotation = message.snapshot.settings.rotation,
-                        isAwaitingRotatedProxy = false
+                        isAwaitingRotatedProxy = false,
+                        isTrimChipHidden = false
                     )
                 }
                 applyIncomingSnapshot(message.snapshot)
@@ -552,7 +598,8 @@ class RemoteSessionStore private constructor(context: Context) {
                     bytesReceived = message.bytesReceived,
                     expectedBytes = message.expectedBytes,
                     elapsedSeconds = message.elapsedSeconds,
-                    statusText = message.statusText
+                    statusText = message.statusText,
+                    estimatedRemainingSeconds = message.estimatedRemainingSeconds
                 )
                 _uiState.update { it.copy(progress = p) }
                 updateForegroundMonitorIfNeeded(force = false)
@@ -647,10 +694,17 @@ class RemoteSessionStore private constructor(context: Context) {
             tileDecodeJob = null
         }
 
+        val shouldResetTrimHidden = snap.viewMode == CanvasViewMode.PREVIEW && (
+            (prev != null && !prev.cropRect.isFull && snap.cropRect.isFull) ||
+                (prev?.hasPreviewImage == false && snap.hasPreviewImage) ||
+                (prev?.activeOperation == CompanionOperation.PREVIEW && !snap.isBusy && snap.hasPreviewImage)
+            )
+
         _uiState.update { cur ->
             cur.copy(
                 snapshot = snap,
                 progress = if (!snap.isBusy) null else cur.progress,
+                isTrimChipHidden = if (shouldResetTrimHidden) false else cur.isTrimChipHidden,
                 proxyBitmap = if (!hasActiveImage) null else cur.proxyBitmap,
                 proxyInfo = if (!hasActiveImage) null else cur.proxyInfo,
                 proxyRotation = if (!hasActiveImage) snap.settings.rotation else cur.proxyRotation,
@@ -894,6 +948,83 @@ class RemoteSessionStore private constructor(context: Context) {
             }
         }
 
+        fun formatRemainingSeconds(seconds: Double): String {
+            val total = max(1, seconds.roundToInt())
+            return when {
+                total >= 3600 -> {
+                    val hours = total / 3600
+                    val mins = (total % 3600) / 60
+                    if (mins > 0) "~${hours}h ${mins}m left" else "~${hours}h left"
+                }
+                total >= 60 -> {
+                    val mins = total / 60
+                    val secs = total % 60
+                    if (secs > 0) "~${mins}m ${secs}s left" else "~${mins}m left"
+                }
+                else -> "~${total}s left"
+            }
+        }
+
+        fun sanitizedBaseFilename(raw: String, format: OutputFormat): String {
+            var clean = raw.trim()
+            val dotExt = ".${format.fileExtension}"
+            if (clean.length > dotExt.length && clean.endsWith(dotExt, ignoreCase = true)) {
+                clean = clean.dropLast(dotExt.length).trim()
+            }
+            return clean
+        }
+
+        fun computeTopStatusPrimaryLine(snap: SessionSnapshot): String {
+            if (snap.viewMode == CanvasViewMode.SCAN &&
+                snap.scanPixelWidth != null &&
+                snap.scanPixelHeight != null &&
+                snap.scanDPI != null
+            ) {
+                val nf = NumberFormat.getIntegerInstance(Locale.US)
+                val pw = nf.format(snap.scanPixelWidth)
+                val ph = nf.format(snap.scanPixelHeight)
+                val trimSuffix = if (snap.isScanTrimmed) " · Trimmed" else ""
+                return "${pw}×${ph} px · ${snap.scanDPI} DPI$trimSuffix"
+            }
+            return computePlannedCaptureReadout(snap)
+        }
+
+        fun computeTopStatusSecondaryLine(snap: SessionSnapshot): String {
+            val profile = if (snap.settings.colorMode == ScanColorMode.GRAYSCALE8) {
+                "Grayscale"
+            } else {
+                snap.settings.colorProfile.shortName
+            }
+            val fmt = snap.settings.outputFormat
+            val dpiPrefix = if (snap.viewMode == CanvasViewMode.SCAN && snap.scanDPI != null) {
+                ""
+            } else {
+                "${snap.settings.resolution} DPI · "
+            }
+            if (fmt.supportsQuality) {
+                val qPct = (snap.settings.quality * 100.0).roundToInt()
+                val est = if (snap.settings.previewCompressionEnabled) {
+                    extractEstimatedLossySize(snap.outputPreviewSummary)
+                } else {
+                    null
+                }
+                return if (est != null) {
+                    "$dpiPrefix$profile · ${fmt.displayName} $qPct% · $est"
+                } else {
+                    "$dpiPrefix$profile · ${fmt.displayName} $qPct%"
+                }
+            }
+            return "$dpiPrefix$profile · ${fmt.displayName}"
+        }
+
+        fun extractEstimatedLossySize(summary: String): String? {
+            val open = summary.lastIndexOf('(')
+            val close = summary.lastIndexOf(')')
+            if (open < 0 || close <= open) return null
+            val inside = summary.substring(open + 1, close).trim()
+            return if (inside.endsWith("est.")) inside else null
+        }
+
         fun computeDimensionsReadout(snap: SessionSnapshot): String {
             val nf = NumberFormat.getIntegerInstance(Locale.US)
             if (snap.viewMode == CanvasViewMode.SCAN &&
@@ -941,7 +1072,7 @@ class RemoteSessionStore private constructor(context: Context) {
             val nf = NumberFormat.getIntegerInstance(Locale.US)
             return String.format(
                 Locale.US,
-                "%.2f\"×%.2f\" · %s×%s (%s raw)",
+                "%.2f\"×%.2f\" · %s×%s (%s)",
                 wIn,
                 hIn,
                 nf.format(pxW),
@@ -1002,7 +1133,13 @@ class RemoteSessionStore private constructor(context: Context) {
                     }
 
                     progress.bytesReceived > 0 && progress.expectedBytes > 0 -> {
-                        statusDetail = "${formatMegabytes(progress.bytesReceived)} / ${formatMegabytes(progress.expectedBytes)} · ${formatElapsedSeconds(progress.elapsedSeconds)}"
+                        val remaining = progress.estimatedRemainingSeconds
+                        val timeSuffix = if (remaining != null && remaining.isFinite() && remaining > 0.0) {
+                            formatRemainingSeconds(remaining)
+                        } else {
+                            formatElapsedSeconds(progress.elapsedSeconds)
+                        }
+                        statusDetail = "${formatMegabytes(progress.bytesReceived)} / ${formatMegabytes(progress.expectedBytes)} · $timeSuffix"
                         val pct = ((fraction ?: 0.0) * 100.0).roundToInt()
                         trailingBadge = "$pct%"
                     }

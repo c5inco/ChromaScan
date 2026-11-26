@@ -181,14 +181,49 @@ class CompanionProtocolTest {
     fun progressAndReadoutFormatting() {
         assertEquals("1m 12s", RemoteSessionStore.formatElapsedSeconds(72.0))
         assertEquals("45s", RemoteSessionStore.formatElapsedSeconds(45.2))
+        assertEquals("~42s left", RemoteSessionStore.formatRemainingSeconds(42.2))
+        assertEquals("~2m 15s left", RemoteSessionStore.formatRemainingSeconds(135.0))
+        assertEquals("~2m left", RemoteSessionStore.formatRemainingSeconds(120.0))
+        assertEquals("artwork-01", RemoteSessionStore.sanitizedBaseFilename("  artwork-01.tiff  ", OutputFormat.TIFF_LZW))
+        assertEquals("poppy", RemoteSessionStore.sanitizedBaseFilename("poppy", OutputFormat.PNG))
+
         val snap = SessionSnapshot(
             viewMode = CanvasViewMode.PREVIEW,
             statusText = "Ready"
         )
         val readout = RemoteSessionStore.computePlannedCaptureReadout(snap)
         assertTrue(readout.contains("8.50\"×11.69\""))
+        assertFalse(readout.contains("raw"))
         assertEquals(CompanionOperation.SCAN, CompanionJson.decodeFromString<CompanionOperation>("\"scan\""))
         assertEquals(OutputFormat.HEIC, CompanionJson.decodeFromString<OutputFormat>("\"heic\""))
+
+        val progressJson = """
+            {
+              "type": "progress",
+              "operation": "scan",
+              "bytesReceived": 41943040,
+              "expectedBytes": 104857600,
+              "elapsedSeconds": 12.0,
+              "statusText": "Scanning 1200 DPI",
+              "estimatedRemainingSeconds": 18.0
+            }
+        """.trimIndent()
+        val decodedProgress = CompanionJson.decodeFromString<HostMessage>(progressJson) as HostMessage.Progress
+        assertEquals(18.0, decodedProgress.estimatedRemainingSeconds!!, 1e-6)
+
+        val activeInfo = RemoteSessionStore.computeActiveOperationInfo(
+            snap = snap.copy(isBusy = true, activeOperation = CompanionOperation.SCAN),
+            progress = com.chromascan.companion.store.RemoteProgressState(
+                operation = CompanionOperation.SCAN,
+                bytesReceived = 40L * 1024L * 1024L,
+                expectedBytes = 100L * 1024L * 1024L,
+                elapsedSeconds = 12.0,
+                statusText = "Scanning 1200 DPI",
+                estimatedRemainingSeconds = 18.0
+            )
+        )
+        assertEquals("40.0 MB / 100.0 MB · ~18s left", activeInfo.statusDetail)
+        assertEquals("40%", activeInfo.trailingBadge)
     }
 
     @Test
