@@ -467,4 +467,27 @@ final class ChromaScanTests: XCTestCase {
             XCTFail("expected ESCLClientError.cancelled, got \(error)")
         }
     }
+
+    // MARK: - Slow USB detection
+
+    func testSlowUSBDetection() {
+        func check(_ transport: ScannerTransport = .usb, preview: Bool = false, dpi: Int = 1200,
+                   format: TransferFormat = .rawOctetStream, mb: Double, seconds: Double) -> Bool {
+            ScanSessionEngine.isSlowUSBTransfer(
+                transport: transport, isPreview: preview, resolution: dpi, transferFormat: format,
+                bytesReceived: Int64(mb * 1e6), streamingSeconds: seconds)
+        }
+        // Stuck printer-side USB mode: ~0.19 MB/s
+        XCTAssertTrue(check(mb: 3.8, seconds: 20))
+        XCTAssertTrue(check(dpi: 300, mb: 3.4, seconds: 18))
+        // Normal USB speed (~1.6–1.7 MB/s)
+        XCTAssertFalse(check(mb: 34, seconds: 20))
+        // Too early to judge
+        XCTAssertFalse(check(mb: 1.0, seconds: 5))
+        // Excluded: Wi-Fi (normally ~0.3 MB/s), previews, low DPI, JPEG transfers
+        XCTAssertFalse(check(.wifi, mb: 6, seconds: 20))
+        XCTAssertFalse(check(preview: true, dpi: 100, mb: 3, seconds: 16))
+        XCTAssertFalse(check(dpi: 200, mb: 2, seconds: 20))
+        XCTAssertFalse(check(format: .jpeg, mb: 2, seconds: 20))
+    }
 }

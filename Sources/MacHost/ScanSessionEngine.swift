@@ -92,6 +92,30 @@ final class ScanSessionEngine {
     /// previous capture can't overwrite the status of a newer one.
     private var captureBytesReceived: Int64 = 0
     private var captureID = UUID()
+    /// When image data first arrived for the active capture (for the slow-USB check).
+    private var captureFirstByteTime: CFAbsoluteTime?
+    private var captureSlowUSBWarned = false
+
+    /// Hint appended to the progress status when a USB transfer is stuck far below normal speed.
+    static let slowUSBHint = "USB unusually slow — power-cycle the printer or use Wi-Fi"
+
+    /// The HP OfficeJet 3830 can get stuck in a printer-side USB slow mode (~0.19 MB/s instead of
+    /// ~1.6 MB/s) that only a printer power cycle clears; Wi-Fi is unaffected. Flag raw USB scans at
+    /// ≥300 DPI that have streamed for ≥15 s at under 0.5 MB/s. Previews (100 DPI, scan-head bound)
+    /// and JPEG transfers are normally slow, so they are excluded.
+    nonisolated static func isSlowUSBTransfer(
+        transport: ScannerTransport,
+        isPreview: Bool,
+        resolution: Int,
+        transferFormat: TransferFormat,
+        bytesReceived: Int64,
+        streamingSeconds: Double
+    ) -> Bool {
+        guard transport == .usb, !isPreview, resolution >= 300,
+              transferFormat == .rawOctetStream, streamingSeconds >= 15 else { return false }
+        let mbPerSecond = Double(bytesReceived) / 1e6 / streamingSeconds
+        return mbPerSecond < 0.5
+    }
     private var previewRenderTask: Task<Void, Never>?
     private var fullScanRenderTask: Task<Void, Never>?
     private var trimTask: Task<Void, Never>?
@@ -827,6 +851,8 @@ final class ScanSessionEngine {
         emit(.progress(operation: op, bytesReceived: 0, expectedBytes: request.transferFormat == .rawOctetStream ? request.expectedRawByteCount : 0, elapsedSeconds: 0, statusText: statusText))
 
         captureBytesReceived = 0
+        captureFirstByteTime = nil
+        captureSlowUSBWarned = false
         let thisCaptureID = UUID()
         captureID = thisCaptureID
         startWaitingForScannerWatchdog(captureID: thisCaptureID, operation: op, labelPrefix: labelPrefix, startTime: startTime,
@@ -845,14 +871,32 @@ final class ScanSessionEngine {
                         guard let self, self.isBusy else { return }
                         if self.captureID == thisCaptureID {
                             self.captureBytesReceived = max(self.captureBytesReceived, recv)
+                            if recv > 0, self.captureFirstByteTime == nil {
+                                self.captureFirstByteTime = CFAbsoluteTimeGetCurrent()
+                            }
+                            if !self.captureSlowUSBWarned, let first = self.captureFirstByteTime,
+                               Self.isSlowUSBTransfer(
+                                   transport: scanner.transport,
+                                   isPreview: isPreview,
+                                   resolution: resolution,
+                                   transferFormat: request.transferFormat,
+                                   bytesReceived: recv,
+                                   streamingSeconds: CFAbsoluteTimeGetCurrent() - first
+                               ) {
+                                self.captureSlowUSBWarned = true
+                                transferLog.notice("SLOW-USB detected: \(Double(recv) / 1e6, format: .fixed(precision: 1)) MB in \(CFAbsoluteTimeGetCurrent() - first, format: .fixed(precision: 0))s of streaming — showing power-cycle hint")
+                            }
                         }
                         let recvMB = Double(recv) / (1024.0 * 1024.0)
-                        let status: String
+                        var status: String
                         if expected > 0 {
                             let expMB = Double(expected) / (1024.0 * 1024.0)
                             status = String(format: "%@ · %.1f / %.1f MB (%.0fs)", labelPrefix, recvMB, expMB, elapsed)
                         } else {
                             status = String(format: "%@ · %.1f MB (%.0fs)", labelPrefix, recvMB, elapsed)
+                        }
+                        if self.captureSlowUSBWarned && self.captureID == thisCaptureID {
+                            status += " · " + Self.slowUSBHint
                         }
                         self.statusText = status
                         self.emit(.progress(operation: op, bytesReceived: recv, expectedBytes: expected, elapsedSeconds: elapsed, statusText: status))
