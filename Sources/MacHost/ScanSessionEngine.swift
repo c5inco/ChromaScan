@@ -303,10 +303,24 @@ final class ScanSessionEngine {
         }
     }
 
+    private var lastLoggedFallbackEndpoint: String?
+
+    /// Logs (once per change) which Wi-Fi endpoint a slow USB scan would fall back to, so the
+    /// fallback can be verified without waiting for the printer's USB slow mode.
+    private func logUSBFallbackEndpointIfChanged() {
+        guard let scanner = selectedScanner, scanner.transport == .usb else { return }
+        let target = browser.networkCounterpart(for: scanner)
+        let desc = target.map { "\($0.host):\($0.port)\($0.useTLS ? " (TLS)" : "")" } ?? "none"
+        guard desc != lastLoggedFallbackEndpoint else { return }
+        lastLoggedFallbackEndpoint = desc
+        transferLog.notice("USB scanner \(scanner.displayTitle, privacy: .public): Wi-Fi fallback endpoint \(desc, privacy: .public)")
+    }
+
     private func handleDiscoveredScanners(_ found: [DiscoveredScanner]) {
         let prevID = selectedScannerID
         let prevSelected = selectedScanner
         self.scanners = found
+        defer { logUSBFallbackEndpointIfChanged() }
 
         if let prevID, let currentSelected = found.first(where: { $0.id == prevID }) {
             // Keep existing selection; if its endpoint URL changed (e.g. USB bridge -> macOS ippusbd
@@ -790,6 +804,10 @@ final class ScanSessionEngine {
         while true {
             let attemptScanner = current
             let fallbackTarget = fallbackAllowed ? browser.networkCounterpart(for: attemptScanner) : nil
+            if fallbackAllowed {
+                let desc = fallbackTarget.map { "\($0.host):\($0.port)" } ?? "none"
+                transferLog.notice("USB scan starting; Wi-Fi fallback endpoint if slow: \(desc, privacy: .public)")
+            }
             let attemptViaFallback = viaFallback
             let attempt = DownloadAttempt()
             captureFirstByteTime = nil

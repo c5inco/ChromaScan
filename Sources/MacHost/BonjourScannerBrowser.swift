@@ -284,7 +284,9 @@ final class CompositeScannerBrowser: ScannerBrowserProtocol {
     }
 
     func networkCounterpart(for scanner: DiscoveredScanner) -> DiscoveredScanner? {
-        ScannerDeduplicator.networkCounterpart(for: scanner, among: bonjourScanners)
+        // Use the raw resolved adverts: the Bonjour browser's published list has already had Wi-Fi
+        // duplicates of the attached USB printer removed, which is exactly the entry we need here.
+        ScannerDeduplicator.networkCounterpart(for: scanner, among: bonjourBrowser.allResolvedScanners)
     }
 
     func addManualScanner(host: String, port: Int, useTLS: Bool, rootPath: String = "eSCL") {
@@ -520,6 +522,9 @@ final class BonjourScannerBrowser: ScannerBrowserProtocol {
             }
         }
     }
+
+    /// Every resolved advert (Wi-Fi and ippusbd loopback), before deduplication.
+    var allResolvedScanners: [DiscoveredScanner] { Array(resolvedByKey.values) }
 
     private func publishMerged() {
         let merged = ScannerDeduplicator.merge(
