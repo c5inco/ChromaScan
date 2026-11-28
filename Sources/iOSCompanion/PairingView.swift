@@ -111,11 +111,10 @@ struct PairingView: View {
                             store.connectManual(host: manualHost, port: p)
                         } label: {
                             Label("Connect to Host", systemImage: "network")
-                                .foregroundStyle(canConnectManual ? ChromaTheme.ink : .secondary)
+                                .chromaAccentButtonForeground(isEnabled: canConnectManual)
                                 .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(ChromaTheme.cream)
+                        .chromaAccentGlassButtonStyle(isEnabled: canConnectManual)
                         .disabled(!canConnectManual)
                     }
                 }
@@ -183,10 +182,9 @@ struct PairingView: View {
                     } label: {
                         Text("Pair")
                             .fontWeight(.semibold)
-                            .foregroundStyle(canSubmitPIN ? ChromaTheme.ink : .secondary)
+                            .chromaAccentButtonForeground(isEnabled: canSubmitPIN)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(ChromaTheme.cream)
+                    .chromaAccentGlassButtonStyle(isEnabled: canSubmitPIN)
                     .disabled(!canSubmitPIN)
                 }
 

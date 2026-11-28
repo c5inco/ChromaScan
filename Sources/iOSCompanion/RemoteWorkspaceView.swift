@@ -218,9 +218,7 @@ struct RemoteWorkspaceView: View {
                                     Label("Trim", systemImage: "crop")
                                         .font(.caption.weight(.semibold))
                                 }
-                                .buttonStyle(.bordered)
-                                .controlSize(.mini)
-                                .background(.ultraThinMaterial, in: Capsule())
+                                .chromaGlassChipStyle()
                                 .disabled(snap.isBusy)
                                 .transition(.opacity.combined(with: .scale(scale: 0.92)))
                             }
@@ -232,9 +230,7 @@ struct RemoteWorkspaceView: View {
                                     Label("Full Page", systemImage: "arrow.uturn.backward")
                                         .font(.caption.weight(.semibold))
                                 }
-                                .buttonStyle(.bordered)
-                                .controlSize(.mini)
-                                .background(.ultraThinMaterial, in: Capsule())
+                                .chromaGlassChipStyle()
                                 .disabled(snap.isBusy)
                                 .transition(.opacity.combined(with: .scale(scale: 0.92)))
                             }
@@ -368,8 +364,7 @@ struct RemoteWorkspaceView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 4)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.regular)
+                .chromaGlassSecondaryButtonStyle()
                 .disabled(!ready || snap.capabilities?.platen == nil)
 
                 Button {
@@ -377,15 +372,13 @@ struct RemoteWorkspaceView: View {
                 } label: {
                     Label("Scan", systemImage: "scanner")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(ready ? ChromaTheme.ink : .secondary)
+                        .chromaAccentButtonForeground(isEnabled: ready)
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 4)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(ChromaTheme.cream)
-                .controlSize(.regular)
+                .chromaAccentGlassButtonStyle(isEnabled: ready)
                 .disabled(!ready)
 
                 Button {
@@ -396,8 +389,7 @@ struct RemoteWorkspaceView: View {
                         .padding(.horizontal, 4)
                         .padding(.vertical, 4)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.regular)
+                .chromaGlassSecondaryButtonStyle()
                 .fixedSize(horizontal: true, vertical: false)
                 .disabled(!snap.hasScanImage)
                 .accessibilityLabel("Export")
@@ -424,9 +416,7 @@ struct RemoteWorkspaceView: View {
                 Button("Cancel", role: .destructive) {
                     store.cancelActiveOperation()
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .tint(.red)
+                .chromaGlassCancelButtonStyle()
             }
 
             ScanningProgressBar(fraction: info.progressFraction)
@@ -552,5 +542,75 @@ private struct ScanningProgressBar: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Operation progress")
         .accessibilityValue(fraction.map { "\(Int(($0 * 100).rounded())) percent" } ?? "In progress")
+    }
+}
+
+// MARK: - Tinted Liquid Glass Button Helpers (iOS 26+ with iOS 17–25 fallback)
+
+extension View {
+    @ViewBuilder
+    func chromaAccentButtonForeground(isEnabled: Bool) -> some View {
+        if #available(iOS 26.0, *) {
+            self.foregroundStyle(isEnabled ? ChromaTheme.cream : .secondary)
+        } else {
+            self.foregroundStyle(isEnabled ? ChromaTheme.ink : .secondary)
+        }
+    }
+
+    @ViewBuilder
+    func chromaAccentGlassButtonStyle(isEnabled: Bool) -> some View {
+        if #available(iOS 26.0, *) {
+            self
+                .buttonStyle(.glassProminent)
+                .tint(isEnabled ? ChromaTheme.cream.opacity(0.32) : .clear)
+                .controlSize(.regular)
+        } else {
+            self
+                .buttonStyle(.borderedProminent)
+                .tint(ChromaTheme.cream)
+                .controlSize(.regular)
+        }
+    }
+
+    @ViewBuilder
+    func chromaGlassSecondaryButtonStyle() -> some View {
+        if #available(iOS 26.0, *) {
+            self
+                .buttonStyle(.glass)
+                .controlSize(.regular)
+        } else {
+            self
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+        }
+    }
+
+    @ViewBuilder
+    func chromaGlassChipStyle() -> some View {
+        if #available(iOS 26.0, *) {
+            self
+                .buttonStyle(.glass)
+                .controlSize(.mini)
+        } else {
+            self
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .background(.ultraThinMaterial, in: Capsule())
+        }
+    }
+
+    @ViewBuilder
+    func chromaGlassCancelButtonStyle() -> some View {
+        if #available(iOS 26.0, *) {
+            self
+                .buttonStyle(.glass)
+                .controlSize(.small)
+                .tint(.red)
+        } else {
+            self
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(.red)
+        }
     }
 }
