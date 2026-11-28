@@ -422,8 +422,8 @@ final class PreviewCanvasView: NSView {
             )
             ctx.setFillColor(NSColor.white.cgColor)
             ctx.fillEllipse(in: dotRect)
-            ctx.setStrokeColor(ChromaTheme.creamNS.cgColor)
-            ctx.setLineWidth(1.75)
+            ctx.setStrokeColor(ChromaTheme.vermilionNS.cgColor)
+            ctx.setLineWidth(2.0)
             ctx.strokeEllipse(in: dotRect)
         }
         ctx.restoreGState()

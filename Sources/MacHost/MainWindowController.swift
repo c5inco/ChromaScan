@@ -2,7 +2,7 @@ import AppKit
 import UniformTypeIdentifiers
 
 @MainActor
-final class MainWindowController: NSWindowController, NSToolbarDelegate, NSMenuItemValidation {
+final class MainWindowController: NSWindowController, NSToolbarDelegate, NSMenuItemValidation, NSWindowDelegate {
 
     private let engine: ScanSessionEngine
     private let companionServer: CompanionServer
@@ -19,6 +19,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSMenuI
     private let viewModeSegment = NSSegmentedControl()
     private let previewButton = NSButton()
     private let scanButton = NSButton()
+    private var scanToolbarItem: NSToolbarItem?
     private let exportButton = NSButton()
     private let companionButton = NSButton()
     private let inspectorToggleButton = NSButton()
@@ -71,6 +72,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSMenuI
         window.center()
 
         super.init(window: window)
+        window.delegate = self
 
         companionPopover.contentViewController = companionPopoverVC
         companionPopover.behavior = .transient
@@ -251,20 +253,12 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSMenuI
             item.label = "Scan"
             item.toolTip = "Scan and save at full resolution (⌘⏎)"
             scanButton.bezelStyle = .rounded
-            scanButton.bezelColor = ChromaTheme.creamNS
-            scanButton.contentTintColor = ChromaTheme.inkNS
-            scanButton.attributedTitle = NSAttributedString(
-                string: "Scan",
-                attributes: [
-                    .foregroundColor: ChromaTheme.inkNS,
-                    .font: NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
-                ]
-            )
-            scanButton.image = NSImage(systemSymbolName: "scanner", accessibilityDescription: "Scan")
             scanButton.imagePosition = .imageLeading
             scanButton.target = self
             scanButton.action = #selector(scanClicked)
             item.view = scanButton
+            scanToolbarItem = item
+            updateScanButtonAppearance()
             return item
 
         case ToolbarID.export:
@@ -272,9 +266,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSMenuI
             item.label = "Export"
             item.toolTip = "Re-export the current scan with updated color profile, format, or tone settings (⌘S)"
             exportButton.bezelStyle = .texturedRounded
-            exportButton.title = "Export"
             exportButton.image = NSImage(systemSymbolName: "square.and.arrow.down", accessibilityDescription: "Export")
-            exportButton.imagePosition = .imageLeading
+            exportButton.imagePosition = .imageOnly
             exportButton.isEnabled = false
             exportButton.target = self
             exportButton.action = #selector(exportScanClicked)
@@ -398,6 +391,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSMenuI
         refreshButton.isEnabled = !snapshot.isBusy
         previewButton.isEnabled = ready && (snapshot.capabilities?.platen != nil)
         scanButton.isEnabled = ready
+        updateScanButtonAppearance()
         exportButton.isEnabled = !snapshot.isBusy && snapshot.hasScanImage
 
         // Footer status
@@ -414,6 +408,56 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSMenuI
 
         updateDimensionsReadout(snapshot: snapshot)
         updateCompanionButtonAppearance()
+    }
+
+    // MARK: - NSWindowDelegate
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        updateScanButtonAppearance()
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        updateScanButtonAppearance()
+    }
+
+    private func updateScanButtonAppearance() {
+        let isProminent = scanButton.isEnabled && (window?.isKeyWindow ?? false)
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+        let baseSymbol = NSImage(systemSymbolName: "scanner", accessibilityDescription: "Scan")
+
+        if isProminent {
+            let foreground: NSColor
+            if #available(macOS 26.0, *) {
+                scanToolbarItem?.style = .prominent
+                scanToolbarItem?.backgroundTintColor = ChromaTheme.creamNS.withAlphaComponent(0.32)
+                scanButton.bezelColor = nil
+                foreground = ChromaTheme.creamNS
+            } else {
+                scanButton.bezelColor = ChromaTheme.creamNS
+                foreground = ChromaTheme.inkNS
+            }
+            scanButton.contentTintColor = foreground
+            scanButton.image = baseSymbol?.withSymbolConfiguration(
+                NSImage.SymbolConfiguration(paletteColors: [foreground])
+            ) ?? baseSymbol
+            scanButton.attributedTitle = NSAttributedString(
+                string: "Scan",
+                attributes: [
+                    .foregroundColor: foreground,
+                    .font: font
+                ]
+            )
+        } else {
+            if #available(macOS 26.0, *) {
+                scanToolbarItem?.style = .plain
+                scanToolbarItem?.backgroundTintColor = nil
+            }
+            scanButton.bezelColor = nil
+            scanButton.contentTintColor = nil
+            scanButton.image = baseSymbol
+            scanButton.font = font
+            scanButton.title = "Scan"
+        }
     }
 
     private func updateCompanionButtonAppearance() {

@@ -145,6 +145,7 @@ final class InspectorViewController: NSViewController, NSTextFieldDelegate {
 
         autoTrimCheck.controlSize = .small
         autoTrimCheck.font = NSFont.systemFont(ofSize: 11.5)
+        autoTrimCheck.bezelColor = ChromaTheme.vermilionNS
         autoTrimCheck.toolTip = "Automatically detect and crop blank flatbed margins when scanning"
         autoTrimCheck.target = self
         autoTrimCheck.action = #selector(autoTrimChanged)
@@ -237,6 +238,7 @@ final class InspectorViewController: NSViewController, NSTextFieldDelegate {
 
         previewCompressionCheck.controlSize = .small
         previewCompressionCheck.font = NSFont.systemFont(ofSize: 11.5)
+        previewCompressionCheck.bezelColor = ChromaTheme.vermilionNS
         previewCompressionCheck.state = .on
         previewCompressionCheck.target = self
         previewCompressionCheck.action = #selector(previewCompressionChanged)
@@ -250,6 +252,7 @@ final class InspectorViewController: NSViewController, NSTextFieldDelegate {
 
         autoIncrementCheck.controlSize = .small
         autoIncrementCheck.font = NSFont.systemFont(ofSize: 11.5)
+        autoIncrementCheck.bezelColor = ChromaTheme.vermilionNS
         autoIncrementCheck.target = self
         autoIncrementCheck.action = #selector(autoIncrementChanged)
         stack.addArrangedSubview(autoIncrementCheck)
@@ -632,6 +635,7 @@ final class InspectorViewController: NSViewController, NSTextFieldDelegate {
         slider.doubleValue = value
         slider.controlSize = .small
         slider.isContinuous = true
+        slider.trackFillColor = ChromaTheme.vermilionNS
         slider.target = self
         slider.action = action
     }

@@ -165,6 +165,7 @@ final class CompanionPopoverViewController: NSViewController {
 
         menuBarCheck.controlSize = .small
         menuBarCheck.font = NSFont.systemFont(ofSize: 11.5)
+        menuBarCheck.bezelColor = ChromaTheme.vermilionNS
         menuBarCheck.target = self
         menuBarCheck.action = #selector(menuBarToggled)
         stack.addArrangedSubview(menuBarCheck)
